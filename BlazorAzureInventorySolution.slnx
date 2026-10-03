@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="BlazorAzureInventory/BlazorAzureInventory.csproj" />
+  <Project Path="BlazorAzureInventorySolution.AppHost/BlazorAzureInventorySolution.AppHost.csproj" />
+  <Project Path="BlazorAzureInventorySolution.ServiceDefaults/BlazorAzureInventorySolution.ServiceDefaults.csproj" />
+</Solution>

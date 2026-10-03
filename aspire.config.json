@@ -1,0 +1,5 @@
+{
+  "appHost": {
+    "path": "BlazorAzureInventorySolution.AppHost/BlazorAzureInventorySolution.AppHost.csproj"
+  }
+}
