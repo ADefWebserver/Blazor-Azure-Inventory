@@ -1,0 +1,104 @@
+@* Configuration entries. The Value column is always masked; ConfigEntry has no value to render. *@
+<RadzenDataGrid TItem="ConfigEntry" Data="@Entries" AllowFiltering="true" FilterMode="FilterMode.Simple"
+                FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" AllowSorting="true" AllowPaging="true" PageSize="25"
+                AllowColumnResize="true" RowRender="@RowRender" EmptyText="No configuration entries.">
+    <Columns>
+        <RadzenDataGridColumn Property="@nameof(ConfigEntry.Key)" Title="Key" Width="260px">
+            <Template Context="e"><span class="mono">@e.Key</span></Template>
+        </RadzenDataGridColumn>
+        <RadzenDataGridColumn Property="@nameof(ConfigEntry.Source)" Title="Source" Width="200px">
+            <Template Context="e">@SourceText(e)</Template>
+        </RadzenDataGridColumn>
+        <RadzenDataGridColumn Property="@nameof(ConfigEntry.FileName)" Title="File" Width="200px">
+            <Template Context="e">
+                @if (e.FileName is not null) { <span class="mono">@e.FileName</span> }
+            </Template>
+        </RadzenDataGridColumn>
+        <RadzenDataGridColumn Title="Value" Width="100px" Sortable="false" Filterable="false">
+            <Template><span class="masked">••••••</span></Template>
+        </RadzenDataGridColumn>
+        <RadzenDataGridColumn Property="@nameof(ConfigEntry.IsOverridden)" Title="Overridden" Width="110px" TextAlign="TextAlign.Center">
+            <Template Context="e">
+                @if (e.IsOverridden) { <RadzenIcon Icon="check" title="Replaced by a higher-precedence source" /> }
+            </Template>
+        </RadzenDataGridColumn>
+        <RadzenDataGridColumn Property="@nameof(ConfigEntry.IsSlotSticky)" Title="Slot sticky" Width="100px" TextAlign="TextAlign.Center">
+            <Template Context="e">
+                @if (e.IsSlotSticky) { <RadzenIcon Icon="check" /> }
+            </Template>
+        </RadzenDataGridColumn>
+        <RadzenDataGridColumn Property="@nameof(ConfigEntry.IsSecretLike)" Title="Secret-like" Width="105px" TextAlign="TextAlign.Center">
+            <Template Context="e">
+                @if (e.IsSecretLike)
+                {
+                    <RadzenIcon Icon="warning" IconColor="@Colors.Warning" title="Looks like a secret stored as plain text. Consider Key Vault." />
+                }
+            </Template>
+        </RadzenDataGridColumn>
+        <RadzenDataGridColumn Property="@nameof(ConfigEntry.IsKeyVaultReference)" Title="Key Vault ref" Width="115px" TextAlign="TextAlign.Center">
+            <Template Context="e">
+                @if (e.IsKeyVaultReference) { <RadzenIcon Icon="key" IconColor="#C8A400" title="Key Vault reference" /> }
+            </Template>
+        </RadzenDataGridColumn>
+        <RadzenDataGridColumn Title="Detected type" Width="150px" Sortable="false">
+            <Template Context="e">
+                <RadzenStack Gap="0.25rem">
+                    @foreach (var r in e.References)
+                    {
+                        <RadzenBadge Text="@(r.IsLocalEmulator ? "Emulator" : ConfigSourceNames.ToDisplay(r.Kind))" Shade="Shade.Lighter" IsPill="true"
+                                     BadgeStyle="@(r.ResolvedResourceId is null ? BadgeStyle.Base : BadgeStyle.Primary)" />
+                    }
+                </RadzenStack>
+            </Template>
+        </RadzenDataGridColumn>
+        <RadzenDataGridColumn Title="Target" Width="260px" Sortable="false">
+            <Template Context="e">
+                <RadzenStack Gap="0.25rem">
+                    @foreach (var r in e.References)
+                    {
+                        <span class="mono" title="@($"Confidence: {r.Confidence}")">@r.TargetDisplay</span>
+                    }
+                </RadzenStack>
+            </Template>
+        </RadzenDataGridColumn>
+        <RadzenDataGridColumn Title="Resolved resource" Width="220px" Sortable="false">
+            <Template Context="e">
+                <RadzenStack Gap="0.25rem">
+                    @foreach (var r in e.References)
+                    {
+                        @if (r.ResolvedResourceId is not null)
+                        {
+                            <RadzenLink Text="@ResolvedName(r.ResolvedResourceId)" Path="@($"graph?focus={Uri.EscapeDataString(r.ResolvedResourceId)}")" />
+                        }
+                        else
+                        {
+                            <span class="muted" title="@($"Confidence: {r.Confidence}")">External</span>
+                        }
+                    }
+                </RadzenStack>
+            </Template>
+        </RadzenDataGridColumn>
+    </Columns>
+</RadzenDataGrid>
+
+@code {
+    [Parameter] public IEnumerable<ConfigEntry> Entries { get; set; } = [];
+    [Parameter] public IReadOnlyDictionary<string, AzureResourceInfo> ResourcesById { get; set; } = new Dictionary<string, AzureResourceInfo>();
+
+    private static void RowRender(RowRenderEventArgs<ConfigEntry> args)
+    {
+        if (args.Data?.IsOverridden == true) args.Attributes.Add("class", "row-overridden");
+    }
+
+    private static string SourceText(ConfigEntry e) => e.Source switch
+    {
+        ConfigSource.AppSettingsJson or ConfigSource.AppSettingsEnvironmentJson => e.FileName ?? "appsettings.json",
+        _ => ConfigSourceNames.ToDisplay(e.Source, e.FileName)
+    };
+
+    private string ResolvedName(string id)
+    {
+        if (!ResourcesById.TryGetValue(id, out var r)) return id.Split('/')[^1];
+        return r.ParentId is not null && ResourcesById.TryGetValue(r.ParentId, out var parent) ? $"{r.Name} ({parent.Name})" : r.Name;
+    }
+}

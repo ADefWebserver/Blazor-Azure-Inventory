@@ -1,0 +1,112 @@
+@page "/graph"
+@attribute [Authorize]
+@using BlazorAzureInventory.Components.Graph
+@using BlazorAzureInventory.Services.Scan
+@inject InventorySessionStore Store
+@inject UserContextAccessor UserContext
+@inject GraphQueryService GraphQueries
+@inject InventoryScanOrchestrator Orchestrator
+@inject NavigationManager Nav
+
+<PageTitle>Knowledge Graph - Azure Inventory</PageTitle>
+
+<RadzenStack Gap="0.75rem">
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" JustifyContent="JustifyContent.SpaceBetween" Wrap="FlexWrap.Wrap">
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+            <RadzenIcon Icon="hub" class="summary-icon" />
+            <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1" class="page-title">Knowledge Graph</RadzenText>
+        </RadzenStack>
+        @if (_graph is not null)
+        {
+            <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">
+                Generated @_graph.GeneratedUtc.ToString("yyyy-MM-dd HH:mm 'UTC'") • @_graph.ScopeDescription
+            </RadzenText>
+        }
+    </RadzenStack>
+
+    @if (_graph is null || _index is null || _facets is null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Info" Shade="Shade.Lighter" AllowClose="false">
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="1rem">
+                <span>No graph available. Run a scan first.</span>
+                <RadzenButton Text="Go to Inventory and Scan" Icon="inventory_2" ButtonStyle="ButtonStyle.Primary" Size="ButtonSize.Small"
+                              Click="@(() => Nav.NavigateTo("inventory"))" />
+            </RadzenStack>
+        </RadzenAlert>
+    }
+    else
+    {
+        <RadzenSplitter class="graph-page">
+            <RadzenSplitterPane Size="280px" Min="200px" Collapsible="true">
+                <GraphFilterPanel Facets="@_facets" Filter="@_filter" Nodes="@_graph.Nodes" FilterChanged="@ApplyFilterAsync" OnFindNode="@FindNodeAsync" />
+            </RadzenSplitterPane>
+            <RadzenSplitterPane>
+                <div class="graph-pane" style="overflow: hidden;">
+                    <GraphCanvas @ref="_canvas" Graph="@_graph" Filter="@_filter" OnNodeSelected="@OnNodeSelected" OnRendered="@OnRenderedAsync" OnRebuild="@RebuildAsync" />
+                </div>
+            </RadzenSplitterPane>
+            <RadzenSplitterPane Size="340px" Min="240px" Collapsible="true">
+                <NodePropertiesPanel Node="@_selected" Index="@_index" />
+            </RadzenSplitterPane>
+        </RadzenSplitter>
+    }
+</RadzenStack>
+
+@code {
+    [SupplyParameterFromQuery] public string? Focus { get; set; }
+
+    private GraphDocument? _graph;
+    private GraphIndex? _index;
+    private GraphFacets? _facets;
+    private GraphNode? _selected;
+    private GraphCanvas? _canvas;
+    private string? _pendingFocus;
+    private readonly GraphFilterState _filter = new()
+    {
+        NodeTypes = NodeTypeStyles.All.Select(t => t.Type).Where(t => !NodeTypeStyles.HiddenByDefault.Contains(t)).ToList()
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        var session = Store.Get(await UserContext.GetUserAsync());
+        Load(session?.Graph, session?.Index);
+        _pendingFocus = Focus;
+    }
+
+    private void Load(GraphDocument? graph, GraphIndex? index)
+    {
+        _graph = graph;
+        _index = index;
+        _facets = index is null ? null : GraphQueries.GetFacets(index);
+        _selected = null;
+    }
+
+    private async Task ApplyFilterAsync()
+    {
+        if (_canvas is not null) await _canvas.ApplyFilterAsync(_filter);
+    }
+
+    private async Task FindNodeAsync(string id)
+    {
+        if (_canvas is not null && await _canvas.FocusAsync(id)) OnNodeSelected(id);
+    }
+
+    private void OnNodeSelected(string? id) =>
+        _selected = id is not null && _index?.NodesById.TryGetValue(id, out var node) == true ? node : null;
+
+    private async Task OnRenderedAsync()
+    {
+        if (_pendingFocus is { } focus)
+        {
+            _pendingFocus = null;
+            await FindNodeAsync(focus);
+        }
+    }
+
+    private async Task RebuildAsync()
+    {
+        var graph = await Orchestrator.RebuildGraphAsync();
+        var session = Store.Get(await UserContext.GetUserAsync());
+        if (graph is not null) Load(graph, session?.Index);
+    }
+}

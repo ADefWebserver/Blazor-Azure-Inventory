@@ -1,7 +1,99 @@
 ﻿@page "/"
+@inject NavigationManager Nav
+@inject InventorySessionStore Store
 
-<PageTitle>Home</PageTitle>
+<PageTitle>Azure Inventory</PageTitle>
 
-<h1>Hello, world!</h1>
+<RadzenStack Gap="1.5rem">
+    <AuthorizeView>
+        <Authorized>
+            <RadzenCard class="hero-card">
+                <RadzenStack Gap="1rem">
+                    <RadzenText TextStyle="TextStyle.H3" TagName="TagName.H1" class="rz-m-0">Welcome back, @FirstName(context.User)</RadzenText>
+                    <RadzenText TextStyle="TextStyle.Body1" class="muted">
+                        Explore your Web Apps, Function Apps, databases, storage, and containers, see how they connect
+                        in the Knowledge Graph, and ask questions with AI.
+                    </RadzenText>
+                    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.75rem" Wrap="FlexWrap.Wrap">
+                        <RadzenButton Text="Go to Inventory" Icon="arrow_forward" ButtonStyle="ButtonStyle.Primary" Size="ButtonSize.Large"
+                                      Click="@(() => Nav.NavigateTo("inventory"))" />
+                    </RadzenStack>
+                    <RadzenText TextStyle="TextStyle.Caption" class="muted">Read-only. Secret values are never stored or displayed.</RadzenText>
+                </RadzenStack>
+            </RadzenCard>
 
-Welcome to your new app.
+            @if (Store.Get(context.User)?.Snapshot is { } snapshot)
+            {
+                <RadzenCard>
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" JustifyContent="JustifyContent.SpaceBetween" Wrap="FlexWrap.Wrap" Gap="1rem">
+                        <RadzenStack Gap="0.25rem">
+                            <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">Last scan</RadzenText>
+                            <RadzenText TextStyle="TextStyle.Body2" class="muted rz-m-0">
+                                @snapshot.ScannedUtc.ToString("yyyy-MM-dd HH:mm 'UTC'") &nbsp;•&nbsp; @snapshot.ScopeDescription
+                                &nbsp;•&nbsp; @snapshot.Resources.Count resources &nbsp;•&nbsp; @snapshot.Issues.Count scan issues
+                            </RadzenText>
+                        </RadzenStack>
+                        <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+                            <RadzenButton Text="Open Graph" Icon="hub" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo("graph"))" />
+                            <RadzenButton Text="Open Chat" Icon="chat" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo("chat"))" />
+                        </RadzenStack>
+                    </RadzenStack>
+                </RadzenCard>
+            }
+        </Authorized>
+        <NotAuthorized>
+            <RadzenCard class="hero-card">
+                <RadzenStack Gap="1rem" AlignItems="AlignItems.Center" Style="text-align: center;">
+                    <RadzenIcon Icon="cloud" class="big-icon" />
+                    <RadzenText TextStyle="TextStyle.H3" TagName="TagName.H1" class="rz-m-0">Map your Azure estate</RadzenText>
+                    <RadzenText TextStyle="TextStyle.Body1" class="muted" Style="max-width: 680px;">
+                        Sign in with Microsoft Entra ID to inventory your Web Apps, Function Apps, databases, storage, and containers,
+                        see how they connect, and ask questions with AI.
+                    </RadzenText>
+                    <RadzenButton Text="Connect to Azure" Icon="login" ButtonStyle="ButtonStyle.Primary" Size="ButtonSize.Large" Click="@SignIn" />
+                    <RadzenText TextStyle="TextStyle.Caption" class="muted">Read-only. Secret values are never stored or displayed.</RadzenText>
+                </RadzenStack>
+            </RadzenCard>
+        </NotAuthorized>
+    </AuthorizeView>
+
+    <RadzenRow Gap="1rem">
+        <RadzenColumn Size="12" SizeMD="4">
+            <RadzenCard class="feature-card">
+                <RadzenStack Gap="0.5rem">
+                    <RadzenIcon Icon="inventory_2" class="feature-icon" />
+                    <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">Inventory</RadzenText>
+                    <RadzenText TextStyle="TextStyle.Body2" class="muted rz-m-0">Lists resources across all your subscriptions, with app configuration analysis.</RadzenText>
+                </RadzenStack>
+            </RadzenCard>
+        </RadzenColumn>
+        <RadzenColumn Size="12" SizeMD="4">
+            <RadzenCard class="feature-card">
+                <RadzenStack Gap="0.5rem">
+                    <RadzenIcon Icon="hub" class="feature-icon" />
+                    <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">Knowledge Graph</RadzenText>
+                    <RadzenText TextStyle="TextStyle.Body2" class="muted rz-m-0">Shows which apps connect to which databases, storage, and vaults.</RadzenText>
+                </RadzenStack>
+            </RadzenCard>
+        </RadzenColumn>
+        <RadzenColumn Size="12" SizeMD="4">
+            <RadzenCard class="feature-card">
+                <RadzenStack Gap="0.5rem">
+                    <RadzenIcon Icon="chat" class="feature-icon" />
+                    <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">AI Chat</RadzenText>
+                    <RadzenText TextStyle="TextStyle.Body2" class="muted rz-m-0">Ask questions like "Which apps use the orders database?"</RadzenText>
+                </RadzenStack>
+            </RadzenCard>
+        </RadzenColumn>
+    </RadzenRow>
+</RadzenStack>
+
+@code {
+    private void SignIn() => Nav.NavigateTo("MicrosoftIdentity/Account/SignIn?redirectUri=%2Finventory", forceLoad: true);
+
+    private static string FirstName(System.Security.Claims.ClaimsPrincipal user)
+    {
+        var name = user.Identity?.Name ?? "";
+        return name.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? name;
+    }
+}

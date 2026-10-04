@@ -1,0 +1,49 @@
+<RadzenDataGrid TItem="ContainerAppRow" Data="@Data" IsLoading="@IsLoading" AllowFiltering="true" FilterMode="FilterMode.Simple"
+                FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" AllowSorting="true" AllowPaging="true" PageSize="10"
+                AllowColumnResize="true" ExpandMode="DataGridExpandMode.Multiple" RowRender="@RowRender" EmptyText="No Container Apps found.">
+    <Template Context="app">
+        <RadzenDataGrid TItem="ConfigEntry" Data="@(app.Analysis?.Entries ?? [])" AllowSorting="true" AllowPaging="true" PageSize="10" AllowColumnResize="true">
+            <Columns>
+                <RadzenDataGridColumn Property="@nameof(ConfigEntry.Key)" Title="Name">
+                    <Template Context="e"><span class="mono">@e.Key</span></Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Source" Width="120px">
+                    <Template Context="e">@(e.Source == ConfigSource.ContainerAppEnvSecretRef ? "secretRef" : "value")</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Value" Width="110px" Sortable="false">
+                    <Template><span class="masked">••••••</span></Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Detected target" Sortable="false">
+                    <Template Context="e">
+                        @foreach (var r in e.References)
+                        {
+                            <div>@ConfigSourceNames.ToDisplay(r.Kind): @r.TargetDisplay</div>
+                        }
+                    </Template>
+                </RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+    </Template>
+    <Columns>
+        <RadzenDataGridColumn Property="@nameof(ContainerAppRow.Name)" Title="Name" />
+        <RadzenDataGridColumn Property="@nameof(ContainerAppRow.Environment)" Title="Environment" />
+        <RadzenDataGridColumn Property="@nameof(ContainerAppRow.Images)" Title="Image(s)" Width="320px" />
+        <RadzenDataGridColumn Property="@nameof(ContainerAppRow.Registry)" Title="Registry" />
+        <RadzenDataGridColumn Property="@nameof(ContainerAppRow.EnvVarCount)" Title="Env var count" Width="130px" />
+        <RadzenDataGridColumn Property="@nameof(ContainerAppRow.Connections)" Title="Connections" Width="120px" />
+        <RadzenDataGridColumn Title="Actions" Width="190px" Sortable="false" Filterable="false">
+            <Template Context="app">
+                <RadzenButton Text="View configuration" Icon="tune" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light"
+                              Click="@(() => OnViewConfiguration.InvokeAsync(app.Resource))" />
+            </Template>
+        </RadzenDataGridColumn>
+    </Columns>
+</RadzenDataGrid>
+
+@code {
+    [Parameter] public IEnumerable<ContainerAppRow> Data { get; set; } = [];
+    [Parameter] public bool IsLoading { get; set; }
+    [Parameter] public EventCallback<AzureResourceInfo> OnViewConfiguration { get; set; }
+
+    private static void RowRender(RowRenderEventArgs<ContainerAppRow> args) => args.Expandable = args.Data?.Analysis?.Entries.Count > 0;
+}

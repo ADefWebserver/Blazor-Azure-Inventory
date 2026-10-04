@@ -1,0 +1,335 @@
+@* Ported from BlazorDataOrchestrator's AIServiceSettingsEditor and restyled with Radzen form fields.
+   Settings live only in the user's session; stored keys are never decrypted into this component. *@
+@using BlazorAzureInventory.Services.AI
+@implements IDisposable
+@inject SessionAISettingsService SettingsService
+@inject AIModelCacheService ModelCacheService
+@inject AIConnectionTester ConnectionTester
+@inject EndpointGuard Guard
+@inject NotificationService NotificationService
+
+<RadzenTemplateForm TItem="AIProviderSettings" Data="@Current" Submit="@(async (AIProviderSettings _) => await SaveAsync())">
+    <RadzenStack Gap="1rem">
+        <RadzenFormField Text="Provider" Variant="Variant.Outlined" Style="width: 100%;">
+            <RadzenDropDown TValue="AIServiceType" Data="@_serviceTypeOptions" TextProperty="Text" ValueProperty="Value"
+                            Value="@_selectedServiceType" ValueChanged="@OnServiceTypeChangedAsync" Name="Provider" />
+        </RadzenFormField>
+
+        <RadzenFormField Text="API key" Variant="Variant.Outlined" Style="width: 100%;">
+            <ChildContent>
+                <RadzenPassword Value="@Current.ApiKey" ValueChanged="@OnApiKeyChangedAsync" Name="ApiKey" Placeholder="@ApiKeyPlaceholder" autocomplete="off" />
+            </ChildContent>
+            <Helper>
+                <RadzenText TextStyle="TextStyle.Caption" class="muted">
+                    @(Current.HasStoredKey ? $"Saved key ••••••••{Current.ApiKeyLast4}. Enter a new key to replace it." : ApiKeyHelpText)
+                </RadzenText>
+            </Helper>
+        </RadzenFormField>
+
+        @if (_selectedServiceType is AIServiceType.AzureOpenAI or AIServiceType.AzureAIFoundry)
+        {
+            <RadzenFormField Text="Endpoint" Variant="Variant.Outlined" Style="width: 100%;">
+                <ChildContent>
+                    <RadzenTextBox Value="@Current.Endpoint" ValueChanged="@OnEndpointChangedAsync" Name="Endpoint" Placeholder="@EndpointPlaceholder" />
+                </ChildContent>
+                <Helper>
+                    @if (EndpointError is { } error)
+                    {
+                        <RadzenText TextStyle="TextStyle.Caption" Style="color: var(--rz-danger);">@error</RadzenText>
+                    }
+                    else if (Resolution is { } r)
+                    {
+                        <RadzenText TextStyle="TextStyle.Caption" class="muted" Style="word-break: break-all;">
+                            @($"{FoundryEndpointResolver.Describe(r.Protocol)} → {r.OperationUrl}")
+                        </RadzenText>
+                    }
+                </Helper>
+            </RadzenFormField>
+        }
+
+        @if (_selectedServiceType == AIServiceType.AzureOpenAI)
+        {
+            <RadzenRow Gap="1rem">
+                <RadzenColumn Size="12" SizeMD="6">
+                    <RadzenFormField Text="API version" Variant="Variant.Outlined" Style="width: 100%;">
+                        <ChildContent>
+                            <RadzenTextBox @bind-Value="@Current.ApiVersion" Name="ApiVersion" Placeholder="v1 (default) or 2024-10-21" />
+                        </ChildContent>
+                        <Helper><RadzenText TextStyle="TextStyle.Caption" class="muted">Leave blank to use the v1 API.</RadzenText></Helper>
+                    </RadzenFormField>
+                </RadzenColumn>
+                <RadzenColumn Size="12" SizeMD="6">
+                    <RadzenFormField Text="Deployment / path" Variant="Variant.Outlined" Style="width: 100%;">
+                        <ChildContent>
+                            <RadzenTextBox @bind-Value="@Current.DeploymentPath" Name="DeploymentPath" Placeholder="openai/deployments/my-gpt4o" />
+                        </ChildContent>
+                        <Helper><RadzenText TextStyle="TextStyle.Caption" class="muted">Optional explicit deployment path.</RadzenText></Helper>
+                    </RadzenFormField>
+                </RadzenColumn>
+            </RadzenRow>
+        }
+
+        @if (_selectedServiceType == AIServiceType.AzureAIFoundry)
+        {
+            <RadzenFormField Text="Foundry protocol" Variant="Variant.Outlined" Style="width: 100%;">
+                <RadzenDropDown TValue="FoundryApiProtocol" Data="@_protocolOptions" TextProperty="Text" ValueProperty="Value"
+                                Value="@Current.ParsedApiProtocol" ValueChanged="@OnProtocolChanged" Name="ApiProtocol" />
+            </RadzenFormField>
+            @foreach (var notice in Resolution?.Notices ?? [])
+            {
+                <RadzenAlert AlertStyle="AlertStyle.Info" Shade="Shade.Lighter" AllowClose="false" Size="AlertSize.Small">@notice</RadzenAlert>
+            }
+        }
+
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+            <RadzenFormField Text="@ModelLabel" Variant="Variant.Outlined" Style="flex: 1;">
+                @if (UseFreeTextModel)
+                {
+                    <RadzenTextBox @bind-Value="@Current.AIModel" Name="AIModel" Placeholder="@ModelPlaceholder" />
+                }
+                else
+                {
+                    <RadzenDropDown TValue="string" Data="@_availableModels" @bind-Value="@Current.AIModel" Name="AIModel"
+                                    AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
+                                    AllowClear="true" Disabled="@(!Current.IsConfigured)" Placeholder="@ModelPlaceholder" />
+                }
+            </RadzenFormField>
+            <RadzenButton Icon="refresh" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Medium" title="Refresh models"
+                          Click="@(() => LoadModelsAsync(forceRefresh: true))" Disabled="@(!Current.IsConfigured)" IsBusy="@_isLoadingModels" />
+        </RadzenStack>
+
+        @if (!string.IsNullOrEmpty(_modelLoadError))
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Warning" Shade="Shade.Lighter" AllowClose="false" Size="AlertSize.Small">@_modelLoadError</RadzenAlert>
+        }
+
+        <RadzenStack Orientation="Orientation.Horizontal" Gap="0.75rem" Wrap="FlexWrap.Wrap">
+            <RadzenButton Text="Test Connection" Icon="network_check" ButtonStyle="ButtonStyle.Secondary" Variant="Variant.Outlined"
+                          Click="@TestConnectionAsync" IsBusy="@_isTesting" Disabled="@(!Current.IsConfigured)" />
+            <RadzenButton Text="Save" Icon="check" ButtonType="ButtonType.Submit" ButtonStyle="ButtonStyle.Primary" IsBusy="@_isSaving" />
+        </RadzenStack>
+
+        @if (_testResult is not null)
+        {
+            <RadzenCard Style="@(_testResult.Success ? "background: #f0fdf4; border: 1px solid #86efac;" : "background: #fef2f2; border: 1px solid #fca5a5;")">
+                <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Start" Gap="0.75rem">
+                    <RadzenIcon Icon="@(_testResult.Success ? "check_circle" : "error")" IconColor="@(_testResult.Success ? "#16a34a" : "#dc2626")" />
+                    <RadzenStack Gap="0.25rem">
+                        <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">@_testResult.Message</RadzenText>
+                        @if (!string.IsNullOrEmpty(_testResult.OperationUrl))
+                        {
+                            <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0" Style="word-break: break-all;">
+                                @($"{_testResult.Protocol} → {_testResult.OperationUrl} ({_testResult.Elapsed.TotalSeconds:0.0}s)")
+                            </RadzenText>
+                        }
+                    </RadzenStack>
+                </RadzenStack>
+            </RadzenCard>
+        }
+    </RadzenStack>
+</RadzenTemplateForm>
+
+@code {
+    [Parameter] public EventCallback OnSaved { get; set; }
+
+    private AISettings _working = new();
+    private AIServiceType _selectedServiceType = AIServiceType.OpenAI;
+    private AIProviderSettings Current => _working.GetOrCreate(_selectedServiceType);
+
+    private List<string> _availableModels = new();
+    private string? _modelLoadError;
+    private bool _isLoadingModels;
+    private bool _isSaving;
+    private bool _isTesting;
+    private AIConnectionTestResult? _testResult;
+    private CancellationTokenSource? _loadCts;
+    private Timer? _debounceTimer;
+
+    private readonly List<Option<AIServiceType>> _serviceTypeOptions =
+        AIServiceTypes.All.Select(t => new Option<AIServiceType>(AIServiceTypes.ToDisplayName(t), t)).ToList();
+
+    private readonly List<Option<FoundryApiProtocol>> _protocolOptions =
+    [
+        new("Auto (recommended)", FoundryApiProtocol.Auto),
+        new("Chat Completions", FoundryApiProtocol.ChatCompletions),
+        new("Responses", FoundryApiProtocol.Responses),
+        new("Anthropic Messages", FoundryApiProtocol.AnthropicMessages)
+    ];
+
+    private sealed record Option<T>(string Text, T Value);
+
+    private bool UseFreeTextModel => _availableModels.Count == 0 && !_isLoadingModels;
+
+    private FoundryEndpointResolution? Resolution =>
+        _selectedServiceType == AIServiceType.AzureAIFoundry && EndpointError is null
+        && FoundryEndpointResolver.TryResolve(Current.Endpoint, Current.AIModel, Current.ParsedApiProtocol, out var r, out _)
+            ? r : null;
+
+    private string? EndpointError =>
+        string.IsNullOrWhiteSpace(Current.Endpoint) ? null
+        : Guard.TryValidateFormat(Current.Endpoint, out _, out var error) ? null : error;
+
+    private string ApiKeyPlaceholder => Current.HasStoredKey ? $"••••••••{Current.ApiKeyLast4}" : _selectedServiceType switch
+    {
+        AIServiceType.OpenAI => "sk-...",
+        AIServiceType.Anthropic => "sk-ant-...",
+        AIServiceType.GoogleAI => "Google AI Studio key",
+        _ => "Resource key"
+    };
+
+    private string ApiKeyHelpText => _selectedServiceType switch
+    {
+        AIServiceType.OpenAI => "Your OpenAI API key.",
+        AIServiceType.AzureOpenAI => "The access key for your Azure OpenAI resource.",
+        AIServiceType.AzureAIFoundry => "The key from the Foundry resource Overview page or the project API key.",
+        AIServiceType.Anthropic => "Your Anthropic API key from the Anthropic console.",
+        _ => "Your Google AI Studio API key."
+    };
+
+    private string EndpointPlaceholder => _selectedServiceType == AIServiceType.AzureAIFoundry
+        ? "https://your-resource.services.ai.azure.com"
+        : "https://contoso.openai.azure.com/";
+
+    private string ModelLabel => _selectedServiceType is AIServiceType.AzureOpenAI or AIServiceType.AzureAIFoundry ? "Deployment name" : "Model";
+
+    private string ModelPlaceholder =>
+        !Current.IsConfigured ? "Enter an API key to load models"
+        : _isLoadingModels ? "Loading models..."
+        : _availableModels.Count == 0 ? "Enter the model or deployment name"
+        : "Select a model...";
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    public async Task ReloadAsync()
+    {
+        _working = await SettingsService.GetSettingsAsync();
+        _selectedServiceType = _working.ActiveServiceType;
+        _testResult = null;
+        await LoadModelsAsync(forceRefresh: false);
+    }
+
+    private async Task OnServiceTypeChangedAsync(AIServiceType type)
+    {
+        _selectedServiceType = type;
+        _working.ActiveServiceType = type;
+        _testResult = null;
+        await LoadModelsAsync(forceRefresh: false);
+    }
+
+    private Task OnApiKeyChangedAsync(string value)
+    {
+        Current.ApiKey = value ?? "";
+        return ScheduleModelLoadAsync();
+    }
+
+    private Task OnEndpointChangedAsync(string value)
+    {
+        Current.Endpoint = value ?? "";
+        return ScheduleModelLoadAsync();
+    }
+
+    private void OnProtocolChanged(FoundryApiProtocol protocol) =>
+        Current.ApiProtocol = protocol == FoundryApiProtocol.Auto ? "" : protocol.ToString();
+
+    private Task ScheduleModelLoadAsync()
+    {
+        _debounceTimer?.Dispose();
+        _debounceTimer = new Timer(_ => _ = InvokeAsync(() => LoadModelsAsync(forceRefresh: false)), null,
+            TimeSpan.FromMilliseconds(750), Timeout.InfiniteTimeSpan);
+        return Task.CompletedTask;
+    }
+
+    private async Task LoadModelsAsync(bool forceRefresh)
+    {
+        _loadCts?.Cancel();
+        _loadCts?.Dispose();
+        _loadCts = new CancellationTokenSource();
+        var token = _loadCts.Token;
+        var provider = Current;
+
+        if (!provider.IsConfigured)
+        {
+            _availableModels = new();
+            _modelLoadError = null;
+            StateHasChanged();
+            return;
+        }
+
+        _isLoadingModels = true;
+        _modelLoadError = null;
+        StateHasChanged();
+        try
+        {
+            var result = await ModelCacheService.GetModelsAsync(provider, forceRefresh, token);
+            if (token.IsCancellationRequested) return;
+
+            _availableModels = result.Models.ToList();
+            _modelLoadError = result.Status == ModelListStatus.Success ? null : result.ErrorMessage;
+            if (!string.IsNullOrWhiteSpace(provider.AIModel) && _availableModels.Count > 0 && !_availableModels.Contains(provider.AIModel))
+            {
+                _availableModels.Insert(0, provider.AIModel);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        finally
+        {
+            if (!token.IsCancellationRequested)
+            {
+                _isLoadingModels = false;
+                StateHasChanged();
+            }
+        }
+    }
+
+    private async Task TestConnectionAsync()
+    {
+        _isTesting = true;
+        _testResult = null;
+        StateHasChanged();
+        try
+        {
+            _testResult = await ConnectionTester.TestAsync(Current);
+        }
+        finally
+        {
+            _isTesting = false;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_selectedServiceType is AIServiceType.AzureOpenAI or AIServiceType.AzureAIFoundry)
+        {
+            if (string.IsNullOrWhiteSpace(Current.Endpoint) || EndpointError is not null)
+            {
+                Notify(NotificationSeverity.Error, "Invalid endpoint", EndpointError ?? "An endpoint is required.");
+                return;
+            }
+        }
+
+        _isSaving = true;
+        try
+        {
+            await SettingsService.SaveSettingsAsync(_working);
+            Notify(NotificationSeverity.Success, "Saved", "AI settings saved for this session.");
+            await OnSaved.InvokeAsync();
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    private void Notify(NotificationSeverity severity, string summary, string detail) =>
+        NotificationService.Notify(new NotificationMessage { Severity = severity, Summary = summary, Detail = detail, Duration = 4000 });
+
+    public void Dispose()
+    {
+        _debounceTimer?.Dispose();
+        _loadCts?.Cancel();
+        _loadCts?.Dispose();
+    }
+}

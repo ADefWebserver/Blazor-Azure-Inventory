@@ -1,30 +1,67 @@
-﻿<div class="top-row ps-3 navbar navbar-dark">
-    <div class="container-fluid">
-        <a class="navbar-brand" href="">BlazorAzureInventory</a>
+﻿@implements IDisposable
+@inject InventorySessionStore Store
+@inject AuthenticationStateProvider AuthState
+
+<RadzenStack Gap="0" Style="height: 100%;" JustifyContent="JustifyContent.SpaceBetween">
+    <div>
+        <RadzenText TextStyle="TextStyle.Overline" TagName="TagName.Span" class="nav-caption">Navigation</RadzenText>
+        <RadzenPanelMenu>
+            <RadzenPanelMenuItem Text="Home" Icon="home" Path="" Match="NavLinkMatch.All" />
+            @if (_signedIn)
+            {
+                <RadzenPanelMenuItem Text="Inventory" Icon="inventory_2" Path="inventory" />
+                <RadzenPanelMenuItem Text="Knowledge Graph" Icon="hub" Path="graph" Disabled="@(!_hasScan)"
+                                     title="@(_hasScan ? null : "Run a scan first")" />
+                <RadzenPanelMenuItem Text="AI Chat" Icon="chat" Path="chat" Disabled="@(!_hasScan)"
+                                     title="@(_hasScan ? null : "Run a scan first")" />
+                <RadzenPanelMenuItem Text="Settings" Icon="settings" Path="settings" />
+            }
+        </RadzenPanelMenu>
     </div>
-</div>
-
-<input type="checkbox" title="Navigation menu" class="navbar-toggler" />
-
-<div class="nav-scrollable" onclick="document.querySelector('.navbar-toggler').click()">
-    <nav class="nav flex-column">
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
-                <span class="bi bi-house-door-fill-nav-menu" aria-hidden="true"></span> Home
-            </NavLink>
+    @if (_signedIn && _domain is not null)
+    {
+        <div class="nav-footer">
+            <RadzenText TextStyle="TextStyle.Overline" TagName="TagName.Div" class="muted">Active directory</RadzenText>
+            <RadzenText TextStyle="TextStyle.Body2" TagName="TagName.Div" class="mono">@_domain</RadzenText>
         </div>
+    }
+</RadzenStack>
 
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="counter">
-                <span class="bi bi-plus-square-fill-nav-menu" aria-hidden="true"></span> Counter
-            </NavLink>
-        </div>
+@code {
+    private bool _signedIn;
+    private bool _hasScan;
+    private string? _domain;
+    private string? _sessionKey;
 
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="weather">
-                <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> Weather
-            </NavLink>
-        </div>
-    </nav>
-</div>
+    protected override async Task OnInitializedAsync()
+    {
+        Store.SessionChanged += OnSessionChanged;
+        AuthState.AuthenticationStateChanged += OnAuthChanged;
+        await RefreshAsync(AuthState.GetAuthenticationStateAsync());
+    }
 
+    private async Task RefreshAsync(Task<AuthenticationState> stateTask)
+    {
+        var user = (await stateTask).User;
+        _signedIn = user.Identity?.IsAuthenticated == true;
+        _sessionKey = _signedIn ? InventorySessionStore.KeyFor(user) : null;
+        _hasScan = _signedIn && Store.Get(user)?.Snapshot is not null;
+        var upn = user.FindFirst("preferred_username")?.Value;
+        _domain = upn is not null && upn.Contains('@') ? upn[(upn.IndexOf('@') + 1)..] : null;
+    }
+
+    private void OnAuthChanged(Task<AuthenticationState> stateTask) =>
+        _ = InvokeAsync(async () => { await RefreshAsync(stateTask); StateHasChanged(); });
+
+    private void OnSessionChanged(string key)
+    {
+        if (key != _sessionKey) return;
+        _ = InvokeAsync(async () => { await RefreshAsync(AuthState.GetAuthenticationStateAsync()); StateHasChanged(); });
+    }
+
+    public void Dispose()
+    {
+        Store.SessionChanged -= OnSessionChanged;
+        AuthState.AuthenticationStateChanged -= OnAuthChanged;
+    }
+}

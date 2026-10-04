@@ -1,0 +1,134 @@
+@page "/chat"
+@attribute [Authorize]
+@implements IDisposable
+@using BlazorAzureInventory.Components.Chat
+@using BlazorAzureInventory.Services.AI
+@inject ChatService ChatService
+@inject NavigationManager Nav
+
+<PageTitle>AI Chat - Azure Inventory</PageTitle>
+
+<div class="chat-page">
+    <RadzenStack Gap="0.75rem" Style="flex: 1; min-height: 0;">
+        <RadzenStack Gap="0">
+            <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1" class="page-title">Ask about your Azure estate</RadzenText>
+            @if (_context is not null)
+            {
+                <RadzenText TextStyle="TextStyle.Body2" class="muted rz-m-0">
+                    @(_context.HasScan ? $"Using scan from {_context.ScannedUtc} ({_context.Scope})." : "No scan available.")
+                    @(_context.ProviderConfigured ? $" Provider: {_context.ProviderName}, model {_context.ModelId}." : "")
+                </RadzenText>
+            }
+        </RadzenStack>
+
+        @if (_context is { HasScan: false })
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Info" Shade="Shade.Lighter" AllowClose="false">
+                <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="1rem">
+                    <span>No scan available. Run a scan first.</span>
+                    <RadzenButton Text="Go to Inventory" Icon="inventory_2" Size="ButtonSize.Small" Click="@(() => Nav.NavigateTo("inventory"))" />
+                </RadzenStack>
+            </RadzenAlert>
+        }
+        @if (_context is { ProviderConfigured: false })
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Warning" Shade="Shade.Lighter" AllowClose="false">
+                <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="1rem">
+                    <span>No AI provider configured for this session.</span>
+                    <RadzenButton Text="Open Settings" Icon="settings" Size="ButtonSize.Small" Click="@(() => Nav.NavigateTo("settings"))" />
+                </RadzenStack>
+            </RadzenAlert>
+        }
+        @if (_context is { LiveToolsAvailable: false, ProviderConfigured: true })
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Info" Shade="Shade.Lighter" AllowClose="false" Size="AlertSize.Small">
+                Live Azure tools unavailable. Answers use the last scan only.
+            </RadzenAlert>
+        }
+
+        <ChatPanel Messages="@_messages" IsBusy="@_busy" Disabled="@(_context is not { HasScan: true, ProviderConfigured: true })"
+                   OnSend="@SendAsync" OnStop="@Stop" OnClear="@Clear" />
+    </RadzenStack>
+</div>
+
+@code {
+    private readonly List<ChatMessageItem> _messages = new();
+    private ChatContextInfo? _context;
+    private bool _busy;
+    private CancellationTokenSource? _cts;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _context = await ChatService.GetContextAsync();
+        if (_context.ProviderConfigured) _ = CheckLiveToolsAsync();
+    }
+
+    private async Task CheckLiveToolsAsync()
+    {
+        var available = await ChatService.IsLiveToolsAvailableAsync(CancellationToken.None);
+        await InvokeAsync(() =>
+        {
+            _context = _context! with { LiveToolsAvailable = available };
+            StateHasChanged();
+        });
+    }
+
+    private async Task SendAsync(string text)
+    {
+        if (_busy || string.IsNullOrWhiteSpace(text)) return;
+        _busy = true;
+        _cts = new CancellationTokenSource();
+
+        _messages.Add(new ChatMessageItem { Role = ChatRoleKind.User, Text = text.Trim() });
+        var history = _messages.ToList();
+        var answer = new ChatMessageItem { Role = ChatRoleKind.Assistant, IsStreaming = true };
+        _messages.Add(answer);
+        StateHasChanged();
+
+        try
+        {
+            await ChatService.SendAsync(history, e => InvokeAsync(() => Handle(e, answer)), _cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            if (answer.Text.Length == 0) answer.Text = "_Stopped._";
+        }
+        finally
+        {
+            answer.IsStreaming = false;
+            if (answer.Text.Length == 0) _messages.Remove(answer);
+            _busy = false;
+            _cts?.Dispose();
+            _cts = null;
+            StateHasChanged();
+        }
+    }
+
+    private void Handle(ChatStreamEvent e, ChatMessageItem answer)
+    {
+        switch (e)
+        {
+            case TextDeltaEvent t:
+                answer.Text += t.Text;
+                break;
+            case ToolCallStartedEvent s:
+                // Tool cards appear between the question and the answer.
+                _messages.Insert(_messages.IndexOf(answer), new ChatMessageItem { Role = ChatRoleKind.Tool, ToolCall = s.Call });
+                break;
+            case ChatErrorEvent err:
+                _messages.Add(new ChatMessageItem { Role = ChatRoleKind.Error, Text = err.Message });
+                break;
+        }
+        StateHasChanged();
+    }
+
+    private void Stop() => _cts?.Cancel();
+
+    private void Clear() => _messages.Clear();
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+}

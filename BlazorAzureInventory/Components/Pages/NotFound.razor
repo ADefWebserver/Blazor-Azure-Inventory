@@ -1,5 +1,13 @@
 ﻿@page "/not-found"
 @layout MainLayout
 
-<h3>Not Found</h3>
-<p>Sorry, the content you are looking for does not exist.</p>
+<PageTitle>Page not found</PageTitle>
+
+<RadzenCard class="centered-card rz-p-8">
+    <RadzenStack AlignItems="AlignItems.Center" Gap="1rem">
+        <RadzenIcon Icon="search_off" class="big-icon" />
+        <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1" class="rz-m-0">Page not found</RadzenText>
+        <RadzenText TextStyle="TextStyle.Body1" class="muted">Sorry, the content you are looking for does not exist.</RadzenText>
+        <RadzenLink Path="/" Text="Go Home" Icon="home" />
+    </RadzenStack>
+</RadzenCard>

@@ -1,0 +1,63 @@
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<RadzenStack Gap="0.75rem" Style="flex: 1; min-height: 0;">
+    <MessageList Messages="@Messages" Module="@_module">
+        @if (Messages.Count == 0)
+        {
+            <RadzenStack AlignItems="AlignItems.Center" Gap="0.75rem" class="rz-p-8">
+                <RadzenIcon Icon="tips_and_updates" class="big-icon" />
+                <RadzenText TextStyle="TextStyle.Body1" class="muted">Try one of these questions:</RadzenText>
+                <RadzenStack Orientation="Orientation.Horizontal" Wrap="FlexWrap.Wrap" JustifyContent="JustifyContent.Center" Gap="0.5rem">
+                    @foreach (var suggestion in Suggestions)
+                    {
+                        <RadzenButton Text="@suggestion" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small"
+                                      Click="@(() => OnSend.InvokeAsync(suggestion))" Disabled="@Disabled" />
+                    }
+                </RadzenStack>
+            </RadzenStack>
+        }
+    </MessageList>
+    <MessageInput IsBusy="@IsBusy" Disabled="@Disabled" OnSend="@OnSend" OnStop="@OnStop" OnClear="@OnClear" Module="@_module" />
+</RadzenStack>
+
+@code {
+    public static readonly string[] Suggestions =
+    [
+        "Which apps use the orders database?",
+        "Which storage accounts are shared by several apps?",
+        "Which databases does no app reference?",
+        "Which apps keep secrets in plain app settings?",
+        "Is contoso-sql healthy?"
+    ];
+
+    [Parameter] public IReadOnlyList<ChatMessageItem> Messages { get; set; } = [];
+    [Parameter] public bool IsBusy { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public EventCallback<string> OnSend { get; set; }
+    [Parameter] public EventCallback OnStop { get; set; }
+    [Parameter] public EventCallback OnClear { get; set; }
+
+    private IJSObjectReference? _module;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/chat.js");
+            StateHasChanged();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_module is not null) await _module.DisposeAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+            // The circuit is gone.
+        }
+    }
+}

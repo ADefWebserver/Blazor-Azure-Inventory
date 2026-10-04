@@ -1,0 +1,19 @@
+<RadzenDataGrid TItem="SimpleRow" Data="@Data" IsLoading="@IsLoading" AllowFiltering="true" FilterMode="FilterMode.Simple"
+                FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" AllowSorting="true" AllowPaging="true" PageSize="10"
+                AllowColumnResize="true" EmptyText="No container registries found.">
+    <Columns>
+        <RadzenDataGridColumn Property="@nameof(SimpleRow.Name)" Title="Name" />
+        <RadzenDataGridColumn Property="@nameof(SimpleRow.EndpointHost)" Title="Login server" />
+        <RadzenDataGridColumn Property="@nameof(SimpleRow.Sku)" Title="SKU" Width="140px" />
+        <RadzenDataGridColumn Property="@nameof(SimpleRow.Consumers)" Title="Consumers" Width="120px">
+            <Template Context="r">
+                <RadzenLink Text="@r.Consumers.ToString()" Path="@($"graph?focus={Uri.EscapeDataString(r.Resource.Id)}")" title="Show in graph" />
+            </Template>
+        </RadzenDataGridColumn>
+    </Columns>
+</RadzenDataGrid>
+
+@code {
+    [Parameter] public IEnumerable<SimpleRow> Data { get; set; } = [];
+    [Parameter] public bool IsLoading { get; set; }
+}

@@ -1,0 +1,32 @@
+<div class="@(Message.Role == ChatRoleKind.User ? "chat-row-user" : "chat-row-assistant") rz-my-2">
+    <RadzenStack Gap="0.25rem" Style="max-width: 100%;" AlignItems="@(Message.Role == ChatRoleKind.User ? AlignItems.End : AlignItems.Start)">
+        <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">
+            @(Message.Role == ChatRoleKind.User ? "You" : "Azure Assistant") @Message.Timestamp.ToString("HH:mm 'UTC'")
+        </RadzenText>
+        @switch (Message.Role)
+        {
+            case ChatRoleKind.User:
+                <RadzenCard class="bubble-user rz-py-2 rz-px-4">@Message.Text</RadzenCard>
+                break;
+            case ChatRoleKind.Error:
+                <RadzenAlert AlertStyle="AlertStyle.Danger" Shade="Shade.Lighter" AllowClose="false" Size="AlertSize.Small">@Message.Text</RadzenAlert>
+                break;
+            default:
+                <RadzenCard class="bubble-assistant rz-py-2 rz-px-4">
+                    @if (string.IsNullOrEmpty(Message.Text) && Message.IsStreaming)
+                    {
+                        <span class="typing-dots" aria-label="Assistant is typing"><span></span><span></span><span></span></span>
+                    }
+                    else
+                    {
+                        @((MarkupString)MarkdownRenderer.ToSafeHtml(Message.Text))
+                    }
+                </RadzenCard>
+                break;
+        }
+    </RadzenStack>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public ChatMessageItem Message { get; set; } = default!;
+}

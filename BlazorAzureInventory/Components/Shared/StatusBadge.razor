@@ -1,0 +1,31 @@
+@* Read status badge with an RBAC hint tooltip. *@
+<span title="@Tooltip">
+    <RadzenBadge BadgeStyle="@Style" Shade="Shade.Lighter" IsPill="true" Text="@(Prefix is null ? Status.ToString() : $"{Prefix}: {Status}")" />
+</span>
+
+@code {
+    [Parameter, EditorRequired] public ConfigReadStatus Status { get; set; }
+    [Parameter] public string? Prefix { get; set; }
+    [Parameter] public bool IsConfigFiles { get; set; }
+
+    private BadgeStyle Style => Status switch
+    {
+        ConfigReadStatus.Read => BadgeStyle.Success,
+        ConfigReadStatus.AccessDenied => BadgeStyle.Danger,
+        ConfigReadStatus.Error => BadgeStyle.Warning,
+        ConfigReadStatus.NotFound => BadgeStyle.Info,
+        _ => BadgeStyle.Base
+    };
+
+    private string Tooltip => Status switch
+    {
+        ConfigReadStatus.Read => "Read successfully.",
+        ConfigReadStatus.AccessDenied when IsConfigFiles =>
+            "Requires Website Contributor and SCM access. Apps with private-endpoint-only SCM sites cannot be read.",
+        ConfigReadStatus.AccessDenied => "Requires Website Contributor (Microsoft.Web/sites/config/list/action).",
+        ConfigReadStatus.NotFound when IsConfigFiles => "No appsettings*.json files were found in site/wwwroot. Custom-container apps usually have none.",
+        ConfigReadStatus.NotFound => "Not found.",
+        ConfigReadStatus.Error => "An error occurred while reading. See scan issues.",
+        _ => "Not scanned."
+    };
+}

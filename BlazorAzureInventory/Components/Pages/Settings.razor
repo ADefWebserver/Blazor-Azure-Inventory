@@ -1,0 +1,36 @@
+@page "/settings"
+@attribute [Authorize]
+@using BlazorAzureInventory.Services.AI
+@inject SessionAISettingsService SettingsService
+@inject NotificationService NotificationService
+
+<PageTitle>AI Settings - Azure Inventory</PageTitle>
+
+<RadzenStack Gap="1rem" Style="max-width: 860px;">
+    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1" class="page-title">AI Settings</RadzenText>
+
+    <RadzenAlert AlertStyle="AlertStyle.Info" Shade="Shade.Lighter" AllowClose="false" Icon="shield">
+        Your API key is kept only for this session, is encrypted in memory, and is never saved.
+    </RadzenAlert>
+
+    <RadzenCard class="rz-p-6">
+        <RadzenStack Gap="1rem">
+            <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
+                <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">Model provider</RadzenText>
+                <RadzenButton Text="Clear session credentials" Icon="restart_alt" Variant="Variant.Text" Size="ButtonSize.Small" Click="@ClearAsync" />
+            </RadzenStack>
+            <AIServiceSettingsEditor @ref="_editor" />
+        </RadzenStack>
+    </RadzenCard>
+</RadzenStack>
+
+@code {
+    private AIServiceSettingsEditor? _editor;
+
+    private async Task ClearAsync()
+    {
+        await SettingsService.ClearAsync();
+        if (_editor is not null) await _editor.ReloadAsync();
+        NotificationService.Notify(NotificationSeverity.Info, "Cleared", "AI settings and keys were removed from this session.");
+    }
+}

@@ -1,0 +1,55 @@
+@using BlazorAzureInventory.Services.Azure
+
+<RadzenStack Gap="0.25rem">
+    <RadzenDropDown TValue="IEnumerable<string>" Data="@_options" TextProperty="@nameof(SubscriptionOption.Text)" ValueProperty="@nameof(SubscriptionOption.Id)"
+                    Value="@SelectedIds" ValueChanged="@OnChanged" Multiple="true" Chips="true" AllowFiltering="true"
+                    FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" AllowSelectAll="true" MaxSelectedLabels="4"
+                    Placeholder="Select subscriptions" Disabled="@Disabled" Style="min-width: 360px; max-width: 640px;">
+        <Template Context="item">
+            @{ var option = (SubscriptionOption)item; }
+            <RadzenStack Gap="0">
+                <span>@option.Name</span>
+                <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">@option.TenantLabel</RadzenText>
+            </RadzenStack>
+        </Template>
+    </RadzenDropDown>
+    @foreach (var tenant in Context?.Tenants.Where(t => t.RequiresInteraction) ?? [])
+    {
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
+            <RadzenIcon Icon="lock" Style="font-size: 1rem;" class="muted" />
+            <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">@tenant.DisplayName (@tenant.DefaultDomain) needs additional consent or MFA.</RadzenText>
+            <RadzenButton Text="Grant access" Variant="Variant.Text" Size="ButtonSize.ExtraSmall" Click="@(() => OnGrantAccess.InvokeAsync(tenant))" />
+        </RadzenStack>
+    }
+</RadzenStack>
+
+@code {
+    [Parameter] public AzureContext? Context { get; set; }
+    [Parameter] public IEnumerable<string> SelectedIds { get; set; } = [];
+    [Parameter] public EventCallback<IEnumerable<string>> SelectedIdsChanged { get; set; }
+    [Parameter] public EventCallback<TenantInfo> OnGrantAccess { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+
+    private List<SubscriptionOption> _options = new();
+
+    protected override void OnParametersSet()
+    {
+        var tenants = Context?.Tenants.ToDictionary(t => t.TenantId, StringComparer.OrdinalIgnoreCase) ?? new();
+        _options = (Context?.Subscriptions ?? [])
+            .Select(s =>
+            {
+                var tenant = tenants.GetValueOrDefault(s.TenantId);
+                var label = tenant is null ? s.TenantId : $"{tenant.DisplayName} ({tenant.DefaultDomain})";
+                return new SubscriptionOption(s.SubscriptionId, s.DisplayName, label);
+            })
+            .OrderBy(o => o.TenantLabel).ThenBy(o => o.Name)
+            .ToList();
+    }
+
+    private Task OnChanged(IEnumerable<string> value) => SelectedIdsChanged.InvokeAsync(value ?? []);
+
+    private sealed record SubscriptionOption(string Id, string Name, string TenantLabel)
+    {
+        public string Text => Name;
+    }
+}

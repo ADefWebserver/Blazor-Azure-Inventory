@@ -1,0 +1,35 @@
+<RadzenDataGrid TItem="SqlServerRow" Data="@Data" IsLoading="@IsLoading" AllowFiltering="true" FilterMode="FilterMode.Simple"
+                FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" AllowSorting="true" AllowPaging="true" PageSize="10"
+                AllowColumnResize="true" ExpandMode="DataGridExpandMode.Multiple" RowRender="@RowRender" EmptyText="No SQL servers found.">
+    <Template Context="server">
+        <RadzenDataGrid TItem="ChildRow" Data="@server.DatabaseRows" AllowSorting="true" AllowColumnResize="true">
+            <Columns>
+                <RadzenDataGridColumn Property="@nameof(ChildRow.Name)" Title="Database" />
+                <RadzenDataGridColumn Property="@nameof(ChildRow.Sku)" Title="SKU" Width="140px" />
+                <RadzenDataGridColumn Property="@nameof(ChildRow.Status)" Title="Status" Width="140px" />
+                <RadzenDataGridColumn Property="@nameof(ChildRow.Consumers)" Title="Consumers" Width="120px">
+                    <Template Context="db">
+                        <RadzenLink Text="@db.Consumers.ToString()" Path="@GraphLink(db.Resource.Id)" title="Show in graph" />
+                    </Template>
+                </RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+    </Template>
+    <Columns>
+        <RadzenDataGridColumn Property="@nameof(SqlServerRow.Server)" Title="Server" />
+        <RadzenDataGridColumn Property="@nameof(SqlServerRow.Fqdn)" Title="FQDN" />
+        <RadzenDataGridColumn Property="@nameof(SqlServerRow.Subscription)" Title="Subscription" />
+        <RadzenDataGridColumn Property="@nameof(SqlServerRow.ResourceGroup)" Title="Resource Group" />
+        <RadzenDataGridColumn Property="@nameof(SqlServerRow.Location)" Title="Location" Width="120px" />
+        <RadzenDataGridColumn Property="@nameof(SqlServerRow.Databases)" Title="Databases" Width="120px" />
+    </Columns>
+</RadzenDataGrid>
+
+@code {
+    [Parameter] public IEnumerable<SqlServerRow> Data { get; set; } = [];
+    [Parameter] public bool IsLoading { get; set; }
+
+    private static void RowRender(RowRenderEventArgs<SqlServerRow> args) => args.Expandable = args.Data?.DatabaseRows.Count > 0;
+
+    private static string GraphLink(string id) => $"graph?focus={Uri.EscapeDataString(id)}";
+}

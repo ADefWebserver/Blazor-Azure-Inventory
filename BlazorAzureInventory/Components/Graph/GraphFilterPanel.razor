@@ -1,0 +1,101 @@
+<RadzenStack Gap="1.25rem" class="graph-pane">
+    <RadzenStack Gap="0.5rem">
+        <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">Search</RadzenText>
+        <RadzenAutoComplete Data="@_nodeOptions" TextProperty="@nameof(NodeOption.Display)" Placeholder="Find a node..."
+                            SelectedItemChanged="@OnSelected" Style="width: 100%;" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" />
+    </RadzenStack>
+
+    <RadzenStack Gap="0.5rem">
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
+            <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">Scope</RadzenText>
+            <RadzenButton Text="Reset" Variant="Variant.Text" Size="ButtonSize.ExtraSmall" Click="@ResetScopeAsync" />
+        </RadzenStack>
+        <RadzenDropDown TValue="List<string>" Data="@Facets.Subscriptions" TextProperty="Value" ValueProperty="Key" Multiple="true" Chips="true"
+                        Value="@Filter.Subscriptions" ValueChanged="@(async (List<string> v) => { Filter.Subscriptions = v ?? new(); await Changed(); })"
+                        Placeholder="All subscriptions" AllowFiltering="true" Style="width: 100%;" />
+        <RadzenDropDown TValue="List<string>" Data="@Facets.ResourceGroups" TextProperty="Value" ValueProperty="Key" Multiple="true" Chips="true"
+                        Value="@Filter.ResourceGroups" ValueChanged="@(async (List<string> v) => { Filter.ResourceGroups = v ?? new(); await Changed(); })"
+                        Placeholder="All resource groups" AllowFiltering="true" Style="width: 100%;" />
+    </RadzenStack>
+
+    <RadzenStack Gap="0.5rem">
+        <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">Display</RadzenText>
+        @foreach (var (label, getter, setter) in DisplayToggles())
+        {
+            <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
+                <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">@label</RadzenText>
+                <RadzenSwitch Value="@getter()" ValueChanged="@(async (bool v) => { setter(v); await Changed(); })" />
+            </RadzenStack>
+        }
+    </RadzenStack>
+
+    <RadzenStack Gap="0.25rem">
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
+            <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">Node types</RadzenText>
+            <RadzenButton Text="Select all" Variant="Variant.Text" Size="ButtonSize.ExtraSmall" Click="@SelectAllAsync" />
+        </RadzenStack>
+        @foreach (var (type, color) in NodeTypeStyles.All)
+        {
+            var count = Facets.NodeTypeCounts.GetValueOrDefault(type);
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                <RadzenCheckBox TValue="bool" Value="@Filter.NodeTypes.Contains(type)" Name="@($"type-{type}")"
+                                ValueChanged="@(async (bool v) => await ToggleTypeAsync(type, v))" />
+                <span class="type-swatch" style="background: @color;"></span>
+                <RadzenLabel Text="@type" Component="@($"type-{type}")" Style="flex: 1;" />
+                <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">@count</RadzenText>
+            </RadzenStack>
+        }
+    </RadzenStack>
+</RadzenStack>
+
+@code {
+    [Parameter, EditorRequired] public GraphFacets Facets { get; set; } = default!;
+    [Parameter, EditorRequired] public GraphFilterState Filter { get; set; } = default!;
+    [Parameter] public IReadOnlyList<GraphNode> Nodes { get; set; } = [];
+    [Parameter] public EventCallback FilterChanged { get; set; }
+    [Parameter] public EventCallback<string> OnFindNode { get; set; }
+
+    private List<NodeOption> _nodeOptions = new();
+
+    protected override void OnParametersSet()
+    {
+        _nodeOptions = Nodes.Select(n => new NodeOption(n.Id, $"{n.Label} ({n.Type})")).OrderBy(o => o.Display).ToList();
+    }
+
+    private IEnumerable<(string Label, Func<bool> Get, Action<bool> Set)> DisplayToggles()
+    {
+        yield return ("Only connected nodes", () => Filter.OnlyConnected, v => Filter.OnlyConnected = v);
+        yield return ("Hide external", () => Filter.HideExternal, v => Filter.HideExternal = v);
+        yield return ("Hide emulator", () => Filter.HideEmulator, v => Filter.HideEmulator = v);
+        yield return ("Show low-confidence edges", () => Filter.ShowLowConfidence, v => Filter.ShowLowConfidence = v);
+    }
+
+    private Task Changed() => FilterChanged.InvokeAsync();
+
+    private async Task ToggleTypeAsync(string type, bool enabled)
+    {
+        Filter.NodeTypes.Remove(type);
+        if (enabled) Filter.NodeTypes.Add(type);
+        await Changed();
+    }
+
+    private async Task SelectAllAsync()
+    {
+        Filter.NodeTypes = NodeTypeStyles.All.Select(t => t.Type).ToList();
+        await Changed();
+    }
+
+    private async Task ResetScopeAsync()
+    {
+        Filter.Subscriptions = new();
+        Filter.ResourceGroups = new();
+        await Changed();
+    }
+
+    private async Task OnSelected(object? item)
+    {
+        if (item is NodeOption option) await OnFindNode.InvokeAsync(option.Id);
+    }
+
+    private sealed record NodeOption(string Id, string Display);
+}

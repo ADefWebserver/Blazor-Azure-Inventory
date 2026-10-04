@@ -1,0 +1,29 @@
+@inject IJSRuntime JS
+
+<div class="chat-messages" @ref="_container">
+    @foreach (var message in Messages)
+    {
+        if (message.Role == ChatRoleKind.Tool && message.ToolCall is not null)
+        {
+            <ToolCallCard Call="@message.ToolCall" />
+        }
+        else
+        {
+            <MessageBubble Message="@message" />
+        }
+    }
+    @ChildContent
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<ChatMessageItem> Messages { get; set; } = [];
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public IJSObjectReference? Module { get; set; }
+
+    private ElementReference _container;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Module is not null) await Module.InvokeVoidAsync("scrollToBottom", _container);
+    }
+}

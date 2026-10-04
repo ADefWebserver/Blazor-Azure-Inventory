@@ -1,0 +1,24 @@
+<RadzenDataGrid TItem="SimpleRow" Data="@Data" IsLoading="@IsLoading" AllowFiltering="true" FilterMode="FilterMode.Simple"
+                FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" AllowSorting="true" AllowPaging="true" PageSize="10"
+                AllowColumnResize="true" EmptyText="No Cosmos DB, Redis, Service Bus, or Key Vault resources found.">
+    <Columns>
+        <RadzenDataGridColumn Property="@nameof(SimpleRow.Type)" Title="Type" Width="150px">
+            <Template Context="r">
+                <RadzenBadge Text="@r.Type" Shade="Shade.Lighter" IsPill="true"
+                             BadgeStyle="@(r.Type switch { "Key Vault" => BadgeStyle.Warning, "Redis" => BadgeStyle.Danger, "Cosmos DB" => BadgeStyle.Primary, _ => BadgeStyle.Secondary })" />
+            </Template>
+        </RadzenDataGridColumn>
+        <RadzenDataGridColumn Property="@nameof(SimpleRow.Name)" Title="Name" />
+        <RadzenDataGridColumn Property="@nameof(SimpleRow.EndpointHost)" Title="Endpoint host" />
+        <RadzenDataGridColumn Property="@nameof(SimpleRow.Consumers)" Title="Consumers" Width="120px">
+            <Template Context="r">
+                <RadzenLink Text="@r.Consumers.ToString()" Path="@($"graph?focus={Uri.EscapeDataString(r.Resource.Id)}")" title="Show in graph" />
+            </Template>
+        </RadzenDataGridColumn>
+    </Columns>
+</RadzenDataGrid>
+
+@code {
+    [Parameter] public IEnumerable<SimpleRow> Data { get; set; } = [];
+    [Parameter] public bool IsLoading { get; set; }
+}

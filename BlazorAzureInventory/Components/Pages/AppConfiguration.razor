@@ -1,0 +1,171 @@
+@page "/appconfiguration"
+@attribute [Authorize]
+@using BlazorAzureInventory.Components.Inventory
+@inject InventorySessionStore Store
+@inject UserContextAccessor UserContext
+@inject NavigationManager Nav
+
+<PageTitle>@(_resource?.Name ?? "App Configuration") - Azure Inventory</PageTitle>
+
+@if (_snapshot is null)
+{
+    <RadzenAlert AlertStyle="AlertStyle.Info" Shade="Shade.Lighter" AllowClose="false">
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="1rem">
+            <span>No scan available. Run a scan first.</span>
+            <RadzenButton Text="Go to Inventory and Scan" Icon="inventory_2" Size="ButtonSize.Small" Click="@(() => Nav.NavigateTo("inventory"))" />
+        </RadzenStack>
+    </RadzenAlert>
+}
+else if (_resource is null || _site is null)
+{
+    <RadzenAlert AlertStyle="AlertStyle.Warning" Shade="Shade.Lighter" AllowClose="false">The requested app was not found in the last scan.</RadzenAlert>
+}
+else
+{
+    <RadzenStack Gap="1rem">
+        <RadzenCard class="rz-p-6">
+            <RadzenStack Gap="0.75rem">
+                <RadzenBreadCrumb>
+                    <RadzenBreadCrumbItem Path="inventory" Text="Inventory" Icon="inventory_2" />
+                    <RadzenBreadCrumbItem Text="@_site.Name" />
+                </RadzenBreadCrumb>
+                <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Start" Wrap="FlexWrap.Wrap" Gap="1rem">
+                    <RadzenStack Gap="0.5rem">
+                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                            <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1" class="page-title">@_site.Name</RadzenText>
+                            <RadzenBadge Text="@KindText(_site.Kind)" Shade="Shade.Lighter" BadgeStyle="BadgeStyle.Primary" IsPill="true" />
+                        </RadzenStack>
+                        <RadzenText TextStyle="TextStyle.Body2" class="muted rz-m-0">
+                            Resource group: <span class="mono">@_site.ResourceGroup</span>
+                            &nbsp;•&nbsp; Detected environment: <strong>@(_analysis?.Environment ?? "n/a")</strong>
+                            &nbsp;•&nbsp; Location: @_site.Location
+                        </RadzenText>
+                    </RadzenStack>
+                    @if (_analysis is not null)
+                    {
+                        <RadzenStack Gap="0.5rem" AlignItems="AlignItems.End">
+                            <StatusBadge Status="@_analysis.SettingsStatus" Prefix="Settings" />
+                            @if (_site.Kind != AzureResourceKind.ContainerApp)
+                            {
+                                <StatusBadge Status="@_analysis.ConfigFilesStatus" Prefix="Config files" IsConfigFiles="true" />
+                            }
+                        </RadzenStack>
+                    }
+                </RadzenStack>
+            </RadzenStack>
+        </RadzenCard>
+
+        <RadzenStack Orientation="Orientation.Horizontal" Wrap="FlexWrap.Wrap" Gap="1rem">
+            <RadzenCard class="summary-card">
+                <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">Total keys scanned</RadzenText>
+                <span class="summary-count">@(_analysis?.Entries.Count ?? 0)</span>
+                <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">Across @SourceCount sources</RadzenText>
+            </RadzenCard>
+            <RadzenCard class="summary-card">
+                <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">Secret-like settings</RadzenText>
+                <span class="summary-count">@SecretLikeCount</span>
+                <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">Consider Key Vault references</RadzenText>
+            </RadzenCard>
+            <RadzenCard class="summary-card">
+                <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">Graph links</RadzenText>
+                <span class="summary-count">@(_analysis?.ConnectionCount ?? 0)</span>
+                <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">Distinct connection targets</RadzenText>
+            </RadzenCard>
+            <RadzenCard class="summary-card">
+                <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">Value masking</RadzenText>
+                <span class="summary-count">100%</span>
+                <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">Values are never stored or shown</RadzenText>
+            </RadzenCard>
+        </RadzenStack>
+
+        <RadzenCard>
+            <RadzenStack Gap="1rem">
+                <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="1.5rem" Wrap="FlexWrap.Wrap">
+                    @if (_slotOptions.Count > 1)
+                    {
+                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                            <RadzenLabel Text="Slot" Component="slot" />
+                            <RadzenDropDown TValue="string" Name="slot" Data="@_slotOptions" TextProperty="Text" ValueProperty="Id"
+                                            Value="@_selectedId" ValueChanged="@OnSlotChanged" Style="min-width: 200px;" />
+                        </RadzenStack>
+                    }
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                        <RadzenSwitch @bind-Value="_onlyReferences" Name="onlyRefs" />
+                        <RadzenLabel Text="Only entries with references" Component="onlyRefs" />
+                    </RadzenStack>
+                    <RadzenTextBox @bind-Value="_filter" Immediate="true" Placeholder="Filter keys or targets..." Style="min-width: 260px;" />
+                </RadzenStack>
+                <ConfigEntriesGrid Entries="@FilteredEntries" ResourcesById="@_resourcesById" />
+            </RadzenStack>
+        </RadzenCard>
+
+        <RadzenAlert AlertStyle="AlertStyle.Info" Shade="Shade.Lighter" AllowClose="false" Title="Precedence rules">
+            App Service connection strings override app settings, which override appsettings.{Environment}.json, which overrides appsettings.json.
+            Overridden entries are struck through; graph edges come only from effective entries.
+        </RadzenAlert>
+    </RadzenStack>
+}
+
+@code {
+    [SupplyParameterFromQuery] public string? Id { get; set; }
+
+    private InventorySnapshot? _snapshot;
+    private AzureResourceInfo? _resource;
+    private AzureResourceInfo? _site;
+    private AppConfigAnalysis? _analysis;
+    private string? _selectedId;
+    private bool _onlyReferences;
+    private string _filter = "";
+    private List<SlotOption> _slotOptions = new();
+    private IReadOnlyDictionary<string, AzureResourceInfo> _resourcesById = new Dictionary<string, AzureResourceInfo>();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _snapshot = Store.Get(await UserContext.GetUserAsync())?.Snapshot;
+        if (_snapshot is null || string.IsNullOrWhiteSpace(Id)) return;
+
+        _resourcesById = _snapshot.Resources.ToDictionary(r => r.Id, StringComparer.OrdinalIgnoreCase);
+        _resource = _resourcesById.GetValueOrDefault(Id);
+        if (_resource is null) return;
+
+        _site = _resource.Kind == AzureResourceKind.WebAppSlot && _resource.ParentId is not null
+            ? _resourcesById.GetValueOrDefault(_resource.ParentId) ?? _resource
+            : _resource;
+
+        _slotOptions = [new SlotOption(_site.Id, "Production")];
+        _slotOptions.AddRange(_snapshot.Resources
+            .Where(r => r.Kind == AzureResourceKind.WebAppSlot && string.Equals(r.ParentId, _site.Id, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(r => r.Name)
+            .Select(r => new SlotOption(r.Id, r.Name)));
+
+        Select(_resource.Id);
+    }
+
+    private void OnSlotChanged(string id) => Select(id);
+
+    private void Select(string id)
+    {
+        _selectedId = id;
+        _analysis = _snapshot?.AppConfigs.FirstOrDefault(a => a.AppId.Equals(id, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private IEnumerable<ConfigEntry> FilteredEntries => (_analysis?.Entries ?? [])
+        .Where(e => !_onlyReferences || e.References.Count > 0)
+        .Where(e => string.IsNullOrWhiteSpace(_filter)
+                    || e.Key.Contains(_filter, StringComparison.OrdinalIgnoreCase)
+                    || e.References.Any(r => r.TargetDisplay.Contains(_filter, StringComparison.OrdinalIgnoreCase)));
+
+    private int SecretLikeCount => _analysis?.Entries.Count(e => e.IsSecretLike && !e.IsOverridden) ?? 0;
+
+    private int SourceCount => _analysis?.Entries.Select(e => (e.Source, e.FileName)).Distinct().Count() ?? 0;
+
+    private static string KindText(AzureResourceKind kind) => kind switch
+    {
+        AzureResourceKind.FunctionApp => "Function App",
+        AzureResourceKind.ContainerApp => "Container App",
+        AzureResourceKind.WebAppSlot => "Slot",
+        _ => "Web App"
+    };
+
+    private sealed record SlotOption(string Id, string Text);
+}

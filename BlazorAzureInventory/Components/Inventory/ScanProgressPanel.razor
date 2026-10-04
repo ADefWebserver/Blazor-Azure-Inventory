@@ -1,0 +1,21 @@
+<RadzenCard class="rz-p-4">
+    <RadzenStack Gap="0.5rem">
+        <RadzenProgressBar Value="@(Progress?.OverallPercent ?? 0)" ShowValue="true" Unit="%" />
+        <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">@Description</RadzenText>
+    </RadzenStack>
+</RadzenCard>
+
+@code {
+    [Parameter] public ScanProgress? Progress { get; set; }
+
+    private string Description
+    {
+        get
+        {
+            if (Progress is null) return "Starting scan...";
+            var counts = Progress.Total > 1 ? $" ({Progress.Completed} / {Progress.Total})" : "";
+            var item = string.IsNullOrEmpty(Progress.CurrentItem) ? "" : $": {Progress.CurrentItem}";
+            return $"{Progress.Stage}{counts}{item}";
+        }
+    }
+}

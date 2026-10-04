@@ -1,0 +1,39 @@
+@inject DialogService DialogService
+
+<RadzenStack Gap="1rem">
+    <RadzenText TextStyle="TextStyle.Body2" class="muted rz-m-0">Resources that could not be fully read during the last scan. Results are partial.</RadzenText>
+    <RadzenDataGrid TItem="ScanIssue" Data="@Issues" AllowSorting="true" AllowPaging="true" PageSize="10" AllowColumnResize="true">
+        <Columns>
+            <RadzenDataGridColumn Property="@nameof(ScanIssue.ResourceName)" Title="Resource" Width="170px">
+                <Template Context="i"><span class="mono">@i.ResourceName</span></Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn Property="@nameof(ScanIssue.Stage)" Title="Stage" Width="170px" />
+            <RadzenDataGridColumn Property="@nameof(ScanIssue.Kind)" Title="Kind" Width="150px">
+                <Template Context="i">
+                    <RadzenBadge Text="@i.Kind.ToString()" Shade="Shade.Lighter" BadgeStyle="@KindStyle(i.Kind)" />
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn Property="@nameof(ScanIssue.Message)" Title="Message">
+                <Template Context="i"><span class="mono" style="white-space: normal;">@i.Message</span></Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+    <RadzenAlert AlertStyle="AlertStyle.Info" Shade="Shade.Lighter" AllowClose="false" Size="AlertSize.Small">
+        Ask an owner to grant the required role, or check network restrictions on the affected resources.
+    </RadzenAlert>
+    <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End">
+        <RadzenButton Text="Close" ButtonStyle="ButtonStyle.Light" Click="@(() => DialogService.Close())" />
+    </RadzenStack>
+</RadzenStack>
+
+@code {
+    [Parameter] public IReadOnlyList<ScanIssue> Issues { get; set; } = [];
+
+    private static BadgeStyle KindStyle(ScanIssueKind kind) => kind switch
+    {
+        ScanIssueKind.AccessDenied or ScanIssueKind.ConsentRequired => BadgeStyle.Danger,
+        ScanIssueKind.Throttled => BadgeStyle.Warning,
+        ScanIssueKind.Timeout or ScanIssueKind.NotFound => BadgeStyle.Info,
+        _ => BadgeStyle.Secondary
+    };
+}

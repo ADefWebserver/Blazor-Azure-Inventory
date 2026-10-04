@@ -1,0 +1,235 @@
+@page "/inventory"
+@attribute [Authorize]
+@implements IDisposable
+@using BlazorAzureInventory.Components.Inventory
+@using BlazorAzureInventory.Services.Azure
+@using BlazorAzureInventory.Services.Scan
+@using Microsoft.Identity.Web
+@inject AzureContextService AzureContextService
+@inject InventoryScanOrchestrator Orchestrator
+@inject InventorySessionStore Store
+@inject UserContextAccessor UserContext
+@inject DialogService DialogService
+@inject NotificationService Notifications
+@inject NavigationManager Nav
+@inject MicrosoftIdentityConsentAndConditionalAccessHandler ConsentHandler
+
+<PageTitle>Inventory - Azure Inventory</PageTitle>
+
+<RadzenStack Gap="1rem">
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Start" JustifyContent="JustifyContent.SpaceBetween" Wrap="FlexWrap.Wrap" Gap="1rem">
+        <RadzenStack Gap="0">
+            <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1" class="page-title">Inventory</RadzenText>
+            <RadzenText TextStyle="TextStyle.Body2" class="muted rz-m-0">Resources and configuration connections across your subscriptions.</RadzenText>
+        </RadzenStack>
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Start" Gap="0.5rem" Wrap="FlexWrap.Wrap">
+            @if (_loadingContext)
+            {
+                <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" Size="ProgressBarCircularSize.Small" />
+            }
+            else
+            {
+                <SubscriptionPicker Context="@_context" @bind-SelectedIds="_selected" OnGrantAccess="@GrantAccess" Disabled="@_scanning" />
+            }
+            <RadzenButton Text="Scan" Icon="play_arrow" ButtonStyle="ButtonStyle.Primary" Click="@ScanAsync"
+                          Disabled="@(_scanning || !_selected.Any())" IsBusy="@_scanning" BusyText="Scanning..." />
+            @if (_scanning)
+            {
+                <RadzenButton Text="Cancel" Icon="stop" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Outlined" Click="@Cancel" />
+            }
+        </RadzenStack>
+    </RadzenStack>
+
+    <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0" Style="text-align: right;">
+        Last scanned: @(_snapshot?.ScannedUtc.ToString("yyyy-MM-dd HH:mm 'UTC'") ?? "never")
+    </RadzenText>
+
+    @if (_scanning)
+    {
+        <ScanProgressPanel Progress="@_progress" />
+    }
+
+    @if (_snapshot is null && !_scanning)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Info" Shade="Shade.Lighter" AllowClose="false">Select subscriptions and click Scan to start.</RadzenAlert>
+    }
+
+    @if (_snapshot?.Issues.Count > 0 && !_scanning)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Warning" Shade="Shade.Lighter" AllowClose="false">
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" JustifyContent="JustifyContent.SpaceBetween">
+                <span>@_snapshot.Issues.Count resource@(_snapshot.Issues.Count == 1 ? "" : "s") could not be fully read. Results are partial.</span>
+                <RadzenButton Text="View issues" Variant="Variant.Text" Size="ButtonSize.Small" Click="@ShowIssuesAsync" />
+            </RadzenStack>
+        </RadzenAlert>
+    }
+
+    <RadzenStack Orientation="Orientation.Horizontal" Wrap="FlexWrap.Wrap" Gap="1rem">
+        @foreach (var card in SummaryCards())
+        {
+            <RadzenCard class="summary-card">
+                <RadzenStack Gap="0.25rem">
+                    <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
+                        <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">@card.Label</RadzenText>
+                        <RadzenIcon Icon="@card.Icon" class="summary-icon" />
+                    </RadzenStack>
+                    <span class="summary-count">@card.Count</span>
+                    <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">@card.Caption</RadzenText>
+                </RadzenStack>
+            </RadzenCard>
+        }
+    </RadzenStack>
+
+    <RadzenTabs RenderMode="TabRenderMode.Client">
+        <Tabs>
+            <RadzenTabsItem Text="Web & Function Apps" Icon="language">
+                <WebAppsGrid Data="@(_view?.Apps ?? [])" IsLoading="@_scanning" OnViewConfiguration="@ViewConfiguration" />
+            </RadzenTabsItem>
+            <RadzenTabsItem Text="SQL" Icon="storage">
+                <SqlGrid Data="@(_view?.SqlServers ?? [])" IsLoading="@_scanning" />
+            </RadzenTabsItem>
+            <RadzenTabsItem Text="Storage" Icon="folder">
+                <StorageGrid Data="@(_view?.Storage ?? [])" IsLoading="@_scanning" />
+            </RadzenTabsItem>
+            <RadzenTabsItem Text="Container Apps" Icon="deployed_code">
+                <ContainerAppsGrid Data="@(_view?.ContainerApps ?? [])" IsLoading="@_scanning" OnViewConfiguration="@ViewConfiguration" />
+            </RadzenTabsItem>
+            <RadzenTabsItem Text="Registries" Icon="inventory">
+                <RegistriesGrid Data="@(_view?.Registries ?? [])" IsLoading="@_scanning" />
+            </RadzenTabsItem>
+            <RadzenTabsItem Text="Other" Icon="category">
+                <OtherResourcesGrid Data="@(_view?.Other ?? [])" IsLoading="@_scanning" />
+            </RadzenTabsItem>
+        </Tabs>
+    </RadzenTabs>
+</RadzenStack>
+
+@code {
+    private AzureContext? _context;
+    private IEnumerable<string> _selected = [];
+    private bool _loadingContext = true;
+    private bool _scanning;
+    private ScanProgress? _progress;
+    private InventorySnapshot? _snapshot;
+    private InventoryView? _view;
+    private CancellationTokenSource? _cts;
+    private DateTime _lastProgressRender;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = await UserContext.GetUserAsync();
+        if (Store.Get(user) is { Snapshot: { } snapshot } session)
+        {
+            _snapshot = snapshot;
+            _view = InventoryView.Build(snapshot, session.Index);
+            _selected = snapshot.Subscriptions.Select(s => s.SubscriptionId).ToList();
+        }
+
+        try
+        {
+            _context = await AzureContextService.GetContextAsync();
+            if (_snapshot is null)
+            {
+                _selected = _context.Subscriptions.Where(s => s.State == "Enabled").Select(s => s.SubscriptionId).ToList();
+            }
+        }
+        catch (Exception ex)
+        {
+            ConsentHandler.HandleException(ex);
+        }
+        finally
+        {
+            _loadingContext = false;
+        }
+    }
+
+    private async Task ScanAsync()
+    {
+        if (_context is null) return;
+        _cts = new CancellationTokenSource();
+        _scanning = true;
+        _progress = null;
+
+        var selected = _selected.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var subscriptions = _context.Subscriptions.Where(s => selected.Contains(s.SubscriptionId)).ToList();
+        var tenantIds = subscriptions.Select(s => s.TenantId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var request = new ScanRequest(_context.Tenants.Where(t => tenantIds.Contains(t.TenantId)).ToList(), subscriptions);
+
+        try
+        {
+            _snapshot = await Task.Run(() => Orchestrator.ScanAsync(request, new Progress(this), _cts.Token));
+            var session = Store.Get(await UserContext.GetUserAsync());
+            _view = InventoryView.Build(_snapshot, session?.Index);
+            Notifications.Notify(NotificationSeverity.Success, "Scan complete",
+                $"{_snapshot.Resources.Count} resources in {_snapshot.ScopeDescription}.");
+        }
+        catch (OperationCanceledException)
+        {
+            Notifications.Notify(NotificationSeverity.Info, "Scan cancelled", "Partial results were discarded.");
+        }
+        catch (Exception ex)
+        {
+            ConsentHandler.HandleException(ex);
+        }
+        finally
+        {
+            _scanning = false;
+            _cts?.Dispose();
+            _cts = null;
+        }
+    }
+
+    private void Cancel() => _cts?.Cancel();
+
+    private void GrantAccess(TenantInfo tenant)
+    {
+        if (AzureContextService.GetConsentError(tenant.TenantId) is { } ex)
+        {
+            ConsentHandler.HandleException(ex);
+        }
+        else
+        {
+            Nav.NavigateTo("MicrosoftIdentity/Account/SignIn?redirectUri=%2Finventory", forceLoad: true);
+        }
+    }
+
+    private Task ShowIssuesAsync() => DialogService.OpenAsync<ScanIssuesDialog>(
+        $"Scan issues ({_snapshot!.Issues.Count})",
+        new Dictionary<string, object?> { [nameof(ScanIssuesDialog.Issues)] = _snapshot.Issues },
+        new DialogOptions { Width = "960px", Resizable = true });
+
+    private void ViewConfiguration(AzureResourceInfo resource) =>
+        Nav.NavigateTo($"appconfiguration?id={Uri.EscapeDataString(resource.Id)}");
+
+    private IEnumerable<(string Label, string Icon, string Count, string Caption)> SummaryCards()
+    {
+        string N(int? v) => v?.ToString() ?? "-";
+        var v = _view;
+        yield return ("Web Apps", "language", N(v?.WebAppCount), v is null ? "" : $"{v.SlotCount} slots");
+        yield return ("Function Apps", "bolt", N(v?.FunctionAppCount), "");
+        yield return ("SQL", "storage", v is null ? "-" : $"{v.SqlServers.Count} / {v.SqlDatabaseCount}", "servers / databases");
+        yield return ("Storage", "folder", v is null ? "-" : $"{v.Storage.Count} / {v.ContainerCount}", "accounts / containers");
+        yield return ("Container Apps", "deployed_code", N(v?.ContainerApps.Count), "");
+        yield return ("Registries", "inventory", N(v?.Registries.Count), "");
+        yield return ("Other", "category", N(v?.Other.Count), "Cosmos, Redis, Service Bus, Key Vault");
+    }
+
+    /// <summary>Re-renders at most every 150 ms so large scans keep the UI responsive.</summary>
+    private sealed class Progress(Inventory page) : IProgress<ScanProgress>
+    {
+        public void Report(ScanProgress value)
+        {
+            page._progress = value;
+            var now = DateTime.UtcNow;
+            if ((now - page._lastProgressRender).TotalMilliseconds < 150 && value.Completed < value.Total) return;
+            page._lastProgressRender = now;
+            _ = page.InvokeAsync(page.StateHasChanged);
+        }
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+}

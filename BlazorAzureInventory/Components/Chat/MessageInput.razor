@@ -1,0 +1,66 @@
+@implements IDisposable
+
+<RadzenCard class="rz-p-3">
+    <RadzenStack Gap="0.5rem">
+        <RadzenTextArea @bind-Value="_text" id="@InputId" Rows="3" Placeholder="Ask a question..." Style="width: 100%; resize: vertical;"
+                        Disabled="@Disabled" MaxLength="4000" aria-label="Ask a question" />
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
+            <RadzenButton Text="Clear chat" Icon="delete_sweep" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small" Click="@(() => OnClear.InvokeAsync())" Disabled="@IsBusy" />
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.75rem">
+                <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">Enter to send, Shift+Enter for a new line</RadzenText>
+                @if (IsBusy)
+                {
+                    <RadzenButton Text="Stop" Icon="stop" ButtonStyle="ButtonStyle.Danger" Click="@(() => OnStop.InvokeAsync())" />
+                }
+                else
+                {
+                    <RadzenButton Text="Send" Icon="send" ButtonStyle="ButtonStyle.Primary" Click="@SendAsync" Disabled="@Disabled" />
+                }
+            </RadzenStack>
+        </RadzenStack>
+    </RadzenStack>
+</RadzenCard>
+
+@code {
+    public const string InputId = "chat-input";
+
+    [Parameter] public bool IsBusy { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public EventCallback<string> OnSend { get; set; }
+    [Parameter] public EventCallback OnStop { get; set; }
+    [Parameter] public EventCallback OnClear { get; set; }
+    [Parameter] public IJSObjectReference? Module { get; set; }
+
+    private string _text = "";
+    private DotNetObjectReference<MessageInput>? _selfRef;
+    private bool _attached;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_attached && Module is not null)
+        {
+            _attached = true;
+            _selfRef = DotNetObjectReference.Create(this);
+            await Module.InvokeVoidAsync("attachEnterToSend", InputId, _selfRef);
+        }
+    }
+
+    [JSInvokable]
+    public async Task SendFromKeyboard(string text)
+    {
+        if (IsBusy || Disabled) return;
+        _text = text ?? "";
+        await SendAsync();
+        StateHasChanged();
+    }
+
+    private async Task SendAsync()
+    {
+        var text = _text.Trim();
+        if (text.Length == 0) return;
+        _text = "";
+        await OnSend.InvokeAsync(text);
+    }
+
+    public void Dispose() => _selfRef?.Dispose();
+}

@@ -1,0 +1,27 @@
+@inject NavigationManager Nav
+
+<AuthorizeView>
+    <Authorized>
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+            <RadzenIcon Icon="account_circle" />
+            <RadzenText TextStyle="TextStyle.Body2" TagName="TagName.Span" class="rz-m-0">@context.User.Identity?.Name</RadzenText>
+            <form method="post" action="account/logout">
+                <AntiforgeryToken />
+                <RadzenButton ButtonType="ButtonType.Submit" Text="Sign out" Icon="logout"
+                              ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small" />
+            </form>
+        </RadzenStack>
+    </Authorized>
+    <NotAuthorized>
+        <RadzenButton Text="Connect to Azure" Icon="login" ButtonStyle="ButtonStyle.Primary" Click="@SignIn" />
+    </NotAuthorized>
+</AuthorizeView>
+
+@code {
+    private void SignIn()
+    {
+        // Identity.Web.UI only honors local redirect URIs.
+        var returnUrl = "/" + Nav.ToBaseRelativePath(Nav.Uri);
+        Nav.NavigateTo($"MicrosoftIdentity/Account/SignIn?redirectUri={Uri.EscapeDataString(returnUrl)}", forceLoad: true);
+    }
+}

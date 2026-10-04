@@ -1,0 +1,14 @@
+{
+  "version": "3.0",
+  "defaultProvider": "jsdelivr",
+  "libraries": [
+    {
+      "library": "vis-network@10.1.2",
+      "destination": "wwwroot/lib/vis-network/",
+      "files": [
+        "standalone/esm/vis-network.min.js",
+        "LICENSE-MIT"
+      ]
+    }
+  ]
+}

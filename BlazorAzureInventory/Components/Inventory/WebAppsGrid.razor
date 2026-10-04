@@ -1,0 +1,58 @@
+<RadzenDataGrid TItem="AppRow" Data="@Data" IsLoading="@IsLoading" AllowFiltering="true" FilterMode="FilterMode.Simple"
+                FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" AllowSorting="true" AllowPaging="true" PageSize="10"
+                AllowColumnResize="true" ExpandMode="DataGridExpandMode.Multiple" RowRender="@RowRender" EmptyText="No Web or Function Apps found.">
+    <Template Context="app">
+        <RadzenDataGrid TItem="AppRow" Data="@app.Slots" AllowSorting="true" AllowColumnResize="true">
+            <Columns>
+                <RadzenDataGridColumn Property="@nameof(AppRow.Name)" Title="Slot" />
+                <RadzenDataGridColumn Property="@nameof(AppRow.State)" Title="State" Width="110px" />
+                <RadzenDataGridColumn Property="@nameof(AppRow.DefaultHost)" Title="Default host" />
+                <RadzenDataGridColumn Title="Settings status" Width="150px" Sortable="false">
+                    <Template Context="slot"><StatusBadge Status="@slot.SettingsStatus" /></Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Property="@nameof(AppRow.Connections)" Title="Connections" Width="120px" />
+                <RadzenDataGridColumn Width="190px" Sortable="false">
+                    <Template Context="slot">
+                        <RadzenButton Text="View configuration" Icon="tune" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light"
+                                      Click="@(() => OnViewConfiguration.InvokeAsync(slot.Resource))" />
+                    </Template>
+                </RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+    </Template>
+    <Columns>
+        <RadzenDataGridColumn Property="@nameof(AppRow.Name)" Title="Name" Width="180px" />
+        <RadzenDataGridColumn Property="@nameof(AppRow.Kind)" Title="Kind" Width="110px">
+            <Template Context="app">
+                <RadzenBadge Text="@app.Kind" Shade="Shade.Lighter" IsPill="true"
+                             BadgeStyle="@(app.Kind switch { "Function" => BadgeStyle.Warning, "Slot" => BadgeStyle.Info, _ => BadgeStyle.Primary })" />
+            </Template>
+        </RadzenDataGridColumn>
+        <RadzenDataGridColumn Property="@nameof(AppRow.Subscription)" Title="Subscription" Width="170px" />
+        <RadzenDataGridColumn Property="@nameof(AppRow.ResourceGroup)" Title="Resource Group" Width="150px" />
+        <RadzenDataGridColumn Property="@nameof(AppRow.Location)" Title="Location" Width="110px" />
+        <RadzenDataGridColumn Property="@nameof(AppRow.State)" Title="State" Width="100px" />
+        <RadzenDataGridColumn Property="@nameof(AppRow.DefaultHost)" Title="Default host" Width="240px" />
+        <RadzenDataGridColumn Property="@nameof(AppRow.SettingsStatus)" Title="Settings status" Width="150px">
+            <Template Context="app"><StatusBadge Status="@app.SettingsStatus" /></Template>
+        </RadzenDataGridColumn>
+        <RadzenDataGridColumn Property="@nameof(AppRow.ConfigFilesStatus)" Title="Config files status" Width="160px">
+            <Template Context="app"><StatusBadge Status="@app.ConfigFilesStatus" IsConfigFiles="true" /></Template>
+        </RadzenDataGridColumn>
+        <RadzenDataGridColumn Property="@nameof(AppRow.Connections)" Title="Connections" Width="120px" />
+        <RadzenDataGridColumn Title="Actions" Width="190px" Sortable="false" Filterable="false">
+            <Template Context="app">
+                <RadzenButton Text="View configuration" Icon="tune" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light"
+                              Click="@(() => OnViewConfiguration.InvokeAsync(app.Resource))" />
+            </Template>
+        </RadzenDataGridColumn>
+    </Columns>
+</RadzenDataGrid>
+
+@code {
+    [Parameter] public IEnumerable<AppRow> Data { get; set; } = [];
+    [Parameter] public bool IsLoading { get; set; }
+    [Parameter] public EventCallback<AzureResourceInfo> OnViewConfiguration { get; set; }
+
+    private static void RowRender(RowRenderEventArgs<AppRow> args) => args.Expandable = args.Data?.Slots.Count > 0;
+}
