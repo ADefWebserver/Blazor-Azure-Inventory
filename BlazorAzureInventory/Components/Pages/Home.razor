@@ -1,10 +1,16 @@
 ﻿@page "/"
 @inject NavigationManager Nav
 @inject InventorySessionStore Store
+@inject SetupStatusService Setup
 
 <PageTitle>Azure Inventory</PageTitle>
 
 <RadzenStack Gap="1.5rem">
+    @if (missing.Count > 0)
+    {
+        <SetupGuide Missing="missing" />
+    }
+
     <AuthorizeView>
         <Authorized>
             <RadzenCard class="hero-card">
@@ -50,7 +56,8 @@
                         Sign in with Microsoft Entra ID to inventory your Web Apps, Function Apps, databases, storage, and containers,
                         see how they connect, and ask questions with AI.
                     </RadzenText>
-                    <RadzenButton Text="Connect to Azure" Icon="login" ButtonStyle="ButtonStyle.Primary" Size="ButtonSize.Large" Click="@SignIn" />
+                    <RadzenButton Text="Connect to Azure" Icon="login" ButtonStyle="ButtonStyle.Primary" Size="ButtonSize.Large" Click="@SignIn"
+                                  Disabled="@missing.Any(SetupStatusService.BlocksSignIn)" />
                     <RadzenText TextStyle="TextStyle.Caption" class="muted">Read-only. Secret values are never stored or displayed.</RadzenText>
                 </RadzenStack>
             </RadzenCard>
@@ -89,6 +96,10 @@
 </RadzenStack>
 
 @code {
+    private IReadOnlyList<SetupRequirement> missing = [];
+
+    protected override void OnInitialized() => missing = Setup.GetMissing();
+
     private void SignIn() => Nav.NavigateTo("MicrosoftIdentity/Account/SignIn?redirectUri=%2Finventory", forceLoad: true);
 
     private static string FirstName(System.Security.Claims.ClaimsPrincipal user)

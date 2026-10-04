@@ -8,6 +8,8 @@ using BlazorAzureInventory.Services.Graph;
 using BlazorAzureInventory.Services.Mcp;
 using BlazorAzureInventory.Services.Scan;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.Extensions.Configuration.Json;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Http.Resilience;
 using Microsoft.Identity.Web;
 using Microsoft.Identity.Web.UI;
@@ -20,7 +22,13 @@ public class Program
     public static void Main(string[] args)
     {
         var builder = WebApplication.CreateBuilder(args);
+        if (builder.Environment.IsDevelopment())
+            AddLocalSettings(builder.Configuration, builder.Environment.ContentRootFileProvider);
         builder.AddServiceDefaults();
+
+        // An empty ClientId makes every request fail; a placeholder keeps the home page up to show the setup steps.
+        if (string.IsNullOrWhiteSpace(builder.Configuration["AzureAd:ClientId"]))
+            builder.Configuration["AzureAd:ClientId"] = "<not-set>";
 
         var armScopes = builder.Configuration.GetSection("AzureResourceManager:Scopes").Get<string[]>()
                         ?? ["https://management.azure.com/user_impersonation"];
@@ -31,6 +39,7 @@ public class Program
             .EnableTokenAcquisitionToCallDownstreamApi(armScopes)
             .AddInMemoryTokenCaches();
         builder.Services.AddTenantGuard();
+        builder.Services.AddSingleton<SetupStatusService>();
 
         builder.Services.AddControllersWithViews().AddMicrosoftIdentityUI();
         builder.Services.AddRazorComponents()
@@ -128,6 +137,23 @@ public class Program
             .AllowAnonymous();
 
         app.Run();
+    }
+
+    public const string LocalSettingsFile = "appsettings.Local.json";
+
+    // Inserted right after appsettings.{env}.json so user secrets, environment variables, and the command line still win.
+    private static void AddLocalSettings(ConfigurationManager configuration, IFileProvider fileProvider)
+    {
+        var sources = configuration.Sources;
+        var index = sources.ToList().FindLastIndex(s =>
+            s is FileConfigurationSource { Path: { } path } && path.StartsWith("appsettings", StringComparison.OrdinalIgnoreCase));
+        sources.Insert(index + 1, new JsonConfigurationSource
+        {
+            FileProvider = fileProvider,
+            Path = LocalSettingsFile,
+            Optional = true,
+            ReloadOnChange = true
+        });
     }
 
     private static void ConfigureLongTimeouts(IServiceCollection services, string clientName, int seconds)

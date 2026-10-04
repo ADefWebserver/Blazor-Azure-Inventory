@@ -41,7 +41,9 @@ Settings live in [BlazorAzureInventory/appsettings.json](BlazorAzureInventory/ap
 | `AzureMcp:AllowedTools` | Must match the `--tool` list in [AzureMcpServer/Dockerfile](AzureMcpServer/Dockerfile) |
 | `Security:AllowedTenantIds` | Optional tenant allowlist (empty allows any organization) |
 
-Example local override (user secrets on the `BlazorAzureInventory` project):
+For local development, replace the `<...>` placeholders in `BlazorAzureInventory/appsettings.Local.json` (web app) and `BlazorAzureInventorySolution.AppHost/appsettings.Local.json` (`mcpTenantId` and `mcpClientId` parameters for the MCP container). Both files are git-ignored, loaded right after `appsettings.{Environment}.json`, and the web app's file is loaded only in Development and never published. While any required value is missing, the home page lists the exact steps to fix it.
+
+Alternatively, override values with user secrets on the `BlazorAzureInventory` project (these take precedence over `appsettings.Local.json`):
 
 ```powershell
 dotnet user-secrets --project BlazorAzureInventory set "AzureAd:ClientId" "<client-id>"

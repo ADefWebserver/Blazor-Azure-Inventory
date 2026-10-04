@@ -1,0 +1,195 @@
+@inject NavigationManager Nav
+@inject IWebHostEnvironment Env
+@inject SetupStatusService Setup
+
+<RadzenCard class="setup-guide">
+    <RadzenStack Gap="1rem">
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+            <RadzenIcon Icon="build" IconStyle="IconStyle.Warning" />
+            <RadzenText TextStyle="TextStyle.H5" TagName="TagName.H2" class="rz-m-0">Setup required</RadzenText>
+        </RadzenStack>
+        <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">
+            The following required settings are missing or still contain placeholder values.
+            Complete the steps below, then restart the app.
+            @if (Env.IsDevelopment())
+            {
+                <span>
+                    Values go into <code>BlazorAzureInventory/@Program.LocalSettingsFile</code>. Open it and replace each <code>&lt;...&gt;</code> placeholder
+                    named below with the real value, keeping the surrounding quotes. The file is loaded only in Development, is git-ignored,
+                    and is never published. User secrets and environment variables override it.
+                </span>
+            }
+            else
+            {
+                <span>Values go into your App Service: <strong>Settings &gt; Environment variables &gt; App settings</strong>.</span>
+            }
+        </RadzenText>
+
+        @if (Env.IsDevelopment() && !File.Exists(Path.Combine(Env.ContentRootPath, Program.LocalSettingsFile)))
+        {
+            <section>
+                <RadzenText TextStyle="TextStyle.H6" TagName="TagName.H3">Create <code>@Program.LocalSettingsFile</code></RadzenText>
+                <RadzenText TextStyle="TextStyle.Body2">
+                    The file does not exist yet. Create <code>BlazorAzureInventory/@Program.LocalSettingsFile</code> (next to <code>appsettings.json</code>) with this content:
+                </RadzenText>
+                <pre class="setup-command"><code>@LocalSettingsTemplate</code></pre>
+            </section>
+        }
+
+        @if (Missing.Contains(SetupRequirement.ClientId))
+        {
+            <section>
+                <RadzenText TextStyle="TextStyle.H6" TagName="TagName.H3">Microsoft Entra client ID (<code>AzureAd:ClientId</code>)</RadzenText>
+                <ol class="setup-steps">
+                    <li>Sign in to the Azure portal at <code>https://portal.azure.com</code> with an account allowed to create app registrations.</li>
+                    <li>Search for <strong>App registrations</strong> and select <strong>+ New registration</strong>.</li>
+                    <li>Name: <code>azinventory-web</code>.</li>
+                    <li>Supported account types: <strong>Accounts in any organizational directory (Any Microsoft Entra ID tenant - Multitenant)</strong>.</li>
+                    <li>Redirect URI: platform <strong>Web</strong>, value <code>@($"{BaseUri}signin-oidc")</code>. Select <strong>Register</strong>.</li>
+                    <li>On the <strong>Overview</strong> page, copy the <strong>Application (client) ID</strong>.</li>
+                    <li>
+                        Open <strong>Authentication</strong>. Under <strong>Web &gt; Redirect URIs</strong> add <code>@($"{BaseUri}signout-callback-oidc")</code>,
+                        set <strong>Front-channel logout URL</strong> to <code>@($"{BaseUri}signout-oidc")</code>, and select <strong>Save</strong>.
+                    </li>
+                    <li>
+                        Open <strong>API permissions</strong> &gt; <strong>+ Add a permission</strong> &gt; <strong>Azure Service Management</strong> &gt;
+                        <strong>Delegated permissions</strong>, check <code>user_impersonation</code>, and select <strong>Add permissions</strong>.
+                        Microsoft Graph <code>User.Read</code> is already listed.
+                    </li>
+                    <li>
+                        Save the client ID:
+                        @Settings(("AzureAd:ClientId", "<azinventory-web-client-id>", "<Application (client) ID>"))
+                    </li>
+                </ol>
+            </section>
+        }
+
+        @if (Missing.Contains(SetupRequirement.ClientCredential))
+        {
+            <section>
+                <RadzenText TextStyle="TextStyle.H6" TagName="TagName.H3">Client credential (<code>AzureAd:ClientCredentials</code>)</RadzenText>
+                @if (Env.IsDevelopment())
+                {
+                    <ol class="setup-steps">
+                        <li>In the <code>azinventory-web</code> app registration, open <strong>Certificates &amp; secrets</strong> &gt; <strong>Client secrets</strong> &gt; <strong>+ New client secret</strong>.</li>
+                        <li>Description: <code>local-dev</code>. Choose an expiry and select <strong>Add</strong>.</li>
+                        <li>Copy the <strong>Value</strong> column immediately (not the Secret ID). It is shown only once.</li>
+                        <li>
+                            Save the secret (<code>SourceType</code> must stay <code>ClientSecret</code>):
+                            @Settings(("AzureAd:ClientCredentials:0:ClientSecret", "<azinventory-web-client-secret>", "<client secret Value>"))
+                        </li>
+                    </ol>
+                }
+                else
+                {
+                    <ol class="setup-steps">
+                        <li>In the Azure portal search for <strong>Managed Identities</strong> &gt; <strong>+ Create</strong>, create a user-assigned identity, and copy its <strong>Client ID</strong>.</li>
+                        <li>Open your App Service &gt; <strong>Identity</strong> &gt; <strong>User assigned</strong> &gt; <strong>+ Add</strong>, select the identity, and select <strong>Add</strong>.</li>
+                        <li>
+                            In the <code>azinventory-web</code> app registration, open <strong>Certificates &amp; secrets</strong> &gt; <strong>Federated credentials</strong> &gt;
+                            <strong>+ Add credential</strong>. Scenario: <strong>Managed Identity</strong>, select the identity, name it <code>app-service</code>, and select <strong>Add</strong>.
+                        </li>
+                        <li>
+                            Add the app settings:
+                            @Settings(("AzureAd:ClientCredentials:0:SourceType", "", "SignedAssertionFromManagedIdentity"),
+                                      ("AzureAd:ClientCredentials:0:ManagedIdentityClientId", "<uami-client-id>", "<managed identity Client ID>"))
+                        </li>
+                    </ol>
+                }
+            </section>
+        }
+
+        @if (Missing.Contains(SetupRequirement.McpScope))
+        {
+            <section>
+                <RadzenText TextStyle="TextStyle.H6" TagName="TagName.H3">Azure MCP Server scope (<code>AzureMcp:Scopes</code>)</RadzenText>
+                <RadzenText TextStyle="TextStyle.Body2" class="muted">Needed for Azure MCP tools in AI Chat. Sign-in and inventory work without it.</RadzenText>
+                <ol class="setup-steps">
+                    <li>In <strong>App registrations</strong> select <strong>+ New registration</strong>. Name: <code>azinventory-mcp</code>, account type <strong>Multitenant</strong>, no redirect URI. Select <strong>Register</strong>.</li>
+                    <li>On <strong>Overview</strong>, copy the <strong>Application (client) ID</strong> (the MCP client ID) and the <strong>Directory (tenant) ID</strong>.</li>
+                    <li>Open <strong>Expose an API</strong>, select <strong>Add</strong> next to Application ID URI, keep <code>api://&lt;MCP client ID&gt;</code>, and select <strong>Save</strong>.</li>
+                    <li>Select <strong>+ Add a scope</strong>: scope name <code>Mcp.Tools.Read</code>, who can consent <strong>Admins and users</strong>, fill in the display names and descriptions, state <strong>Enabled</strong>, and select <strong>Add scope</strong>.</li>
+                    <li>Open <strong>Manifest</strong>, set <code>"knownClientApplications": ["@(Setup.WebClientId ?? "<azinventory-web client ID>")"]</code> in the <code>api</code> section, and select <strong>Save</strong>.</li>
+                    <li>Open <strong>API permissions</strong> &gt; <strong>+ Add a permission</strong> &gt; <strong>Azure Service Management</strong> &gt; <strong>Delegated permissions</strong> &gt; <code>user_impersonation</code> &gt; <strong>Add permissions</strong>.</li>
+                    <li>In the <code>azinventory-web</code> registration open <strong>API permissions</strong> &gt; <strong>+ Add a permission</strong> &gt; <strong>APIs my organization uses</strong> &gt; <code>azinventory-mcp</code> &gt; <strong>Delegated permissions</strong> &gt; <code>Mcp.Tools.Read</code> &gt; <strong>Add permissions</strong>.</li>
+                    <li>
+                        Save the scope (only the client ID inside the URI changes):
+                        @Settings(("AzureMcp:Scopes:0", "<azinventory-mcp-client-id>", "<MCP client ID>"))
+                    </li>
+                    @if (Env.IsDevelopment())
+                    {
+                        <li>
+                            Set the AppHost parameters for the MCP container in <code>BlazorAzureInventorySolution.AppHost/appsettings.Local.json</code>
+                            (create it with this content if it does not exist), replacing both placeholders:
+                            <pre class="setup-command"><code>@AppHostSettingsTemplate</code></pre>
+                            <code>&lt;azinventory-mcp-tenant-id&gt;</code> is the <strong>Directory (tenant) ID</strong> and
+                            <code>&lt;azinventory-mcp-client-id&gt;</code> is the <strong>MCP client ID</strong>.
+                        </li>
+                    }
+                </ol>
+                <RadzenText TextStyle="TextStyle.Body2" class="muted">
+                    To run without the Azure MCP Server instead, set <code>"Enabled": false</code> under <code>AzureMcp</code>
+                    @(Env.IsDevelopment() ? $"in {Program.LocalSettingsFile}" : "(app setting AzureMcp__Enabled = false)").
+                </RadzenText>
+            </section>
+        }
+
+        <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0"><strong>Finally, restart the app</strong> so the new values are loaded.</RadzenText>
+    </RadzenStack>
+</RadzenCard>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<SetupRequirement> Missing { get; set; } = [];
+
+    private string BaseUri => Nav.BaseUri;
+
+    private const string LocalSettingsTemplate = """
+        {
+          "AzureAd": {
+            "ClientId": "<azinventory-web-client-id>",
+            "ClientCredentials": [
+              {
+                "SourceType": "ClientSecret",
+                "ClientSecret": "<azinventory-web-client-secret>"
+              }
+            ]
+          },
+          "AzureMcp": {
+            "Enabled": true,
+            "Scopes": [ "api://<azinventory-mcp-client-id>/Mcp.Tools.Read" ]
+          }
+        }
+        """;
+
+    private const string AppHostSettingsTemplate = """
+        {
+          "Parameters": {
+            "mcpTenantId": "<azinventory-mcp-tenant-id>",
+            "mcpClientId": "<azinventory-mcp-client-id>"
+          }
+        }
+        """;
+
+    // Development: placeholder replacement in appsettings.Local.json. Production: App Service app settings.
+    private RenderFragment Settings(params (string Key, string Placeholder, string Value)[] settings)
+    {
+        if (!Env.IsDevelopment())
+        {
+            var text = string.Join(Environment.NewLine, settings.Select(s => $"{s.Key.Replace(":", "__")} = {s.Value}"));
+            return @<pre class="setup-command"><code>@text</code></pre>;
+        }
+
+        return @<ul class="setup-steps">
+            @foreach (var s in settings)
+            {
+                <li>
+                    In <code>@Program.LocalSettingsFile</code> at <code>@JsonPath(s.Key)</code>, replace <code>@s.Placeholder</code>
+                    with <code>@s.Value</code>.
+                </li>
+            }
+        </ul>;
+    }
+
+    private static string JsonPath(string key) =>
+        string.Join(" > ", key.Split(':').Select(p => int.TryParse(p, out var i) ? $"[{i}]" : p));
+}
