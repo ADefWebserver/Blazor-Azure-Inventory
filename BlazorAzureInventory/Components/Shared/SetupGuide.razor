@@ -41,12 +41,13 @@
             <section>
                 <RadzenText TextStyle="TextStyle.H6" TagName="TagName.H3">Microsoft Entra client ID (<code>AzureAd:ClientId</code>)</RadzenText>
                 <ol class="setup-steps">
-                    <li>Sign in to the Azure portal at <code>https://portal.azure.com</code> with an account allowed to create app registrations.</li>
+                    <li>Sign in to the Azure portal at <code>https://portal.azure.com</code> with an account allowed to create app registrations (for example the <strong>Application Developer</strong> role).</li>
+                    <li>Check the directory shown under your account name (top right). If it is not the tenant that should own the app, select <strong>Settings &gt; Directories + subscriptions</strong> and switch.</li>
                     <li>Search for <strong>App registrations</strong> and select <strong>+ New registration</strong>.</li>
                     <li>Name: <code>azinventory-web</code>.</li>
                     <li>Supported account types: <strong>Accounts in any organizational directory (Any Microsoft Entra ID tenant - Multitenant)</strong>.</li>
                     <li>Redirect URI: platform <strong>Web</strong>, value <code>@($"{BaseUri}signin-oidc")</code>. Select <strong>Register</strong>.</li>
-                    <li>On the <strong>Overview</strong> page, copy the <strong>Application (client) ID</strong>.</li>
+                    <li>On the <strong>Overview</strong> page, copy the <strong>Application (client) ID</strong> and the <strong>Directory (tenant) ID</strong> (needed for the credential below).</li>
                     <li>
                         Open <strong>Authentication</strong>. Under <strong>Web &gt; Redirect URIs</strong> add <code>@($"{BaseUri}signout-callback-oidc")</code>,
                         set <strong>Front-channel logout URL</strong> to <code>@($"{BaseUri}signout-oidc")</code>, and select <strong>Save</strong>.
@@ -70,18 +71,57 @@
                 <RadzenText TextStyle="TextStyle.H6" TagName="TagName.H3">Client credential (<code>AzureAd:ClientCredentials</code>)</RadzenText>
                 @if (Env.IsDevelopment())
                 {
+                    <RadzenText TextStyle="TextStyle.Body2">
+                        The Azure portal limits client secrets to at most 24 months. Use option A for up to 2 years, or option B for a longer lifetime.
+                    </RadzenText>
+
+                    <RadzenText TextStyle="TextStyle.Subtitle2" TagName="TagName.H4">Option A: Azure portal (up to 24 months)</RadzenText>
                     <ol class="setup-steps">
                         <li>In the <code>azinventory-web</code> app registration, open <strong>Certificates &amp; secrets</strong> &gt; <strong>Client secrets</strong> &gt; <strong>+ New client secret</strong>.</li>
-                        <li>Description: <code>local-dev</code>. Choose an expiry and select <strong>Add</strong>.</li>
+                        <li>Description: <code>local-dev</code>. Expires: <strong>24 months</strong> (or <strong>Custom</strong> with an end date up to 2 years away). Select <strong>Add</strong>.</li>
                         <li>Copy the <strong>Value</strong> column immediately (not the Secret ID). It is shown only once.</li>
+                    </ol>
+
+                    <RadzenText TextStyle="TextStyle.Subtitle2" TagName="TagName.H4">Option B: Azure CLI (longer than 2 years)</RadzenText>
+                    <ol class="setup-steps">
+                        <li>Install the Azure CLI if needed: <code>winget install -e --id Microsoft.AzureCLI</code>, then open a new terminal.</li>
                         <li>
-                            Save the secret (<code>SourceType</code> must stay <code>ClientSecret</code>):
+                            Sign in to the tenant that owns the app registration (<code>--allow-no-subscriptions</code> lets accounts without a subscription sign in):
+                            <pre class="setup-command"><code>az login --tenant "&lt;Directory (tenant) ID&gt;" --allow-no-subscriptions</code></pre>
+                        </li>
+                        <li>
+                            Create a secret valid for 5 years (change <code>--years</code>, or use <code>--end-date 2031-12-31</code> instead). <code>--append</code> keeps existing secrets,
+                            and the command prints only the new secret value:
+                            <pre class="setup-command"><code>az ad app credential reset --id "@AppId" --append --display-name "local-dev" --years 5 --query password --output tsv</code></pre>
+                        </li>
+                        <li>
+                            Copy the printed value. It cannot be retrieved later. Confirm the expiry date with:
+                            <pre class="setup-command"><code>az ad app credential list --id "@AppId" --query "[].{name:displayName, expires:endDateTime}" --output table</code></pre>
+                        </li>
+                        <li>
+                            If the command fails with <em>Credential lifetime exceeds the max value allowed as per assigned policy</em>, your tenant enforces an
+                            app management policy that caps secret lifetimes. Use a shorter <code>--years</code> value or ask a tenant administrator to allow a longer lifetime.
+                        </li>
+                        <li>
+                            Microsoft Graph PowerShell alternative (requires <code>Install-Module Microsoft.Graph.Applications</code>):
+                            <pre class="setup-command"><code>@GraphPowerShellCommands</code></pre>
+                        </li>
+                    </ol>
+
+                    <RadzenText TextStyle="TextStyle.Subtitle2" TagName="TagName.H4">Then save the secret</RadzenText>
+                    <ol class="setup-steps">
+                        <li>
+                            <code>SourceType</code> must stay <code>ClientSecret</code>:
                             @Settings(("AzureAd:ClientCredentials:0:ClientSecret", "<azinventory-web-client-secret>", "<client secret Value>"))
                         </li>
+                        <li>Set a reminder to create a new secret before the expiry date. Sign-in fails with error <code>AADSTS7000222</code> once it expires.</li>
                     </ol>
                 }
                 else
                 {
+                    <RadzenText TextStyle="TextStyle.Body2">
+                        Production uses a federated credential from a managed identity. It has no secret and no expiry date, so it never needs to be renewed.
+                    </RadzenText>
                     <ol class="setup-steps">
                         <li>In the Azure portal search for <strong>Managed Identities</strong> &gt; <strong>+ Create</strong>, create a user-assigned identity, and copy its <strong>Client ID</strong>.</li>
                         <li>Open your App Service &gt; <strong>Identity</strong> &gt; <strong>User assigned</strong> &gt; <strong>+ Add</strong>, select the identity, and select <strong>Add</strong>.</li>
@@ -142,6 +182,14 @@
     [Parameter, EditorRequired] public IReadOnlyList<SetupRequirement> Missing { get; set; } = [];
 
     private string BaseUri => Nav.BaseUri;
+
+    private string AppId => Setup.WebClientId ?? "<Application (client) ID>";
+
+    private string GraphPowerShellCommands => string.Join(Environment.NewLine,
+        "Connect-MgGraph -TenantId \"<Directory (tenant) ID>\" -Scopes Application.ReadWrite.All",
+        $"$app = Get-MgApplication -Filter \"appId eq '{AppId}'\"",
+        "$credential = " + "@" + "{ DisplayName = 'local-dev'; EndDateTime = (Get-Date).AddYears(5) }",
+        "(Add-MgApplicationPassword -ApplicationId $app.Id -PasswordCredential $credential).SecretText");
 
     private const string LocalSettingsTemplate = """
         {
