@@ -1,0 +1,340 @@
+@* Review and apply a tag proposal. Nothing is written until the user clicks Apply. Values are rendered as encoded text. *@
+@implements IDisposable
+@using Microsoft.Extensions.Options
+@using BlazorAzureInventory.Models.Options
+@inject TagProposalStore Proposals
+@inject TagWriteService Writer
+@inject InventorySessionStore Store
+@inject UserContextAccessor UserContext
+@inject ResourceDialogLauncher Launcher
+@inject NotificationService Notifications
+@inject IOptions<TaggingOptions> TaggingOptions
+
+<RadzenCard class="tag-proposal-card rz-my-2">
+    @if (_proposal is null)
+    {
+        <RadzenText TextStyle="TextStyle.Body2" class="muted rz-m-0">This tag proposal is no longer available (for example after a new scan).</RadzenText>
+    }
+    else
+    {
+        <RadzenStack Gap="0.75rem">
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" JustifyContent="JustifyContent.SpaceBetween" Wrap="FlexWrap.Wrap" Gap="0.5rem">
+                <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                    <RadzenIcon Icon="sell" class="summary-icon" />
+                    <RadzenText TextStyle="TextStyle.Subtitle1" class="rz-m-0">@_proposal.Title</RadzenText>
+                    <RadzenBadge Text="@_proposal.Status.ToString()" Shade="Shade.Lighter" IsPill="true" BadgeStyle="@StatusStyle(_proposal.Status)" />
+                </RadzenStack>
+                <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">
+                    @Valid.Count resource(s) • @Valid.Sum(d => d.Adds) add • @Valid.Sum(d => d.Updates) update • @Valid.Sum(d => d.Removes) remove
+                    • scan @_proposal.ScanUtc.ToString("yyyy-MM-dd HH:mm 'UTC'") • @_proposal.Id
+                </RadzenText>
+            </RadzenStack>
+
+            <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">@_proposal.Reason</RadzenText>
+
+            @if (IsStale)
+            {
+                <RadzenAlert AlertStyle="AlertStyle.Warning" Shade="Shade.Lighter" AllowClose="false" Size="AlertSize.Small">
+                    The scan is older than @TaggingOptions.Value.StaleScanWarningHours hours. Consider rescanning first.
+                </RadzenAlert>
+            }
+
+            @if (_proposal.Warnings.Count + _proposal.Errors.Count + _proposal.Diffs.Sum(d => d.Warnings.Count) > 0)
+            {
+                <RadzenPanel AllowCollapse="true" Collapsed="true" class="tool-card" Style="max-width: 100%; margin: 0;">
+                    <HeaderTemplate>
+                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                            <RadzenIcon Icon="warning" IconStyle="IconStyle.Warning" />
+                            <span>@(_proposal.Errors.Count) error(s), @(_proposal.Warnings.Count + _proposal.Diffs.Sum(d => d.Warnings.Count)) warning(s)</span>
+                        </RadzenStack>
+                    </HeaderTemplate>
+                    <ChildContent>
+                        @foreach (var e in _proposal.Errors)
+                        {
+                            <div class="validation-message">@e</div>
+                        }
+                        @foreach (var w in _proposal.Warnings)
+                        {
+                            <div>@w</div>
+                        }
+                        @foreach (var d in _proposal.Diffs.Where(d => d.Warnings.Count > 0))
+                        {
+                            @foreach (var w in d.Warnings)
+                            {
+                                <div><span class="mono">@d.ResourceLabel</span>: @w</div>
+                            }
+                        }
+                    </ChildContent>
+                </RadzenPanel>
+            }
+
+            @if (CanSelect)
+            {
+                <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+                    <RadzenButton Text="Select all" Variant="Variant.Text" Size="ButtonSize.ExtraSmall" Click="@SelectAll" />
+                    <RadzenButton Text="Select none" Variant="Variant.Text" Size="ButtonSize.ExtraSmall" Click="@(() => _proposal.SelectedResourceIds.Clear())" />
+                </RadzenStack>
+            }
+
+            <div class="proposal-table-host">
+                <table class="roles-table">
+                    <thead>
+                        <tr><th style="width: 36px;"></th><th>Resource</th><th>Type</th><th>Changes</th><th>Result</th><th style="width: 140px;"></th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var diff in _proposal.Diffs)
+                        {
+                            var result = _proposal.Results.GetValueOrDefault(diff.ResourceId);
+                            <tr>
+                                <td>
+                                    <RadzenCheckBox TValue="bool" Value="@_proposal.SelectedResourceIds.Contains(diff.ResourceId)"
+                                                    Disabled="@(!CanSelect || !diff.IsValid || diff.IsEmpty || result?.Outcome == TagWriteOutcome.Succeeded)"
+                                                    ValueChanged="@((bool v) => Toggle(diff.ResourceId, v))" aria-label="@($"Select {diff.ResourceLabel}")" />
+                                </td>
+                                <td>
+                                    <ResourceLink Id="@diff.ResourceId" Text="@diff.ResourceLabel" />
+                                    @if (_proposal.BaselineChanged.Contains(diff.ResourceId))
+                                    {
+                                        <RadzenIcon Icon="sync_problem" IconStyle="IconStyle.Warning" title="Tags changed since this proposal was created; Apply will check for conflicts." />
+                                    }
+                                </td>
+                                <td>@diff.ResourceType</td>
+                                <td>
+                                    @if (!diff.IsValid)
+                                    {
+                                        <span class="validation-message">@string.Join(" ", diff.Errors)</span>
+                                    }
+                                    else
+                                    {
+                                        <span>+@diff.Adds ~@diff.Updates -@diff.Removes</span>
+                                    }
+                                </td>
+                                <td>
+                                    @if (result is not null)
+                                    {
+                                        <span title="@result.Message">
+                                            <RadzenIcon Icon="@ResultIcon(result.Outcome)" IconStyle="@(result.Outcome == TagWriteOutcome.Succeeded ? IconStyle.Success : IconStyle.Danger)" />
+                                            @(result.Outcome == TagWriteOutcome.Succeeded ? "Saved" : result.Message)
+                                            @if (result.Retries > 0) { <span class="muted"> (retried @result.Retries×)</span> }
+                                        </span>
+                                    }
+                                </td>
+                                <td>
+                                    <RadzenButton Icon="@(_expanded.Contains(diff.ResourceId) ? "expand_less" : "expand_more")" Variant="Variant.Text" Size="ButtonSize.ExtraSmall"
+                                                  title="Show tag changes" Click="@(() => ToggleExpanded(diff.ResourceId))" />
+                                    @if (diff.IsValid && !diff.IsEmpty && _proposal.Status != TagProposalStatus.Expired)
+                                    {
+                                        <RadzenButton Text="Review" Variant="Variant.Text" Size="ButtonSize.ExtraSmall" title="Review and edit in the resource popup"
+                                                      Click="@(() => Launcher.OpenAsync(diff.ResourceId, diff.ResourceLabel, ResourceDialogLauncher.TagsTab, diff))" />
+                                    }
+                                </td>
+                            </tr>
+                            @if (_expanded.Contains(diff.ResourceId))
+                            {
+                                <tr>
+                                    <td></td>
+                                    <td colspan="5">
+                                        <table class="roles-table">
+                                            <thead><tr><th>Change</th><th>Tag</th><th>Old value</th><th>New value</th></tr></thead>
+                                            <tbody>
+                                                @foreach (var c in diff.Changes)
+                                                {
+                                                    <tr>
+                                                        <td><RadzenBadge Text="@c.Kind.ToString()" Shade="Shade.Lighter" IsPill="true" BadgeStyle="@KindStyle(c.Kind)" /></td>
+                                                        <td class="mono">@c.Name</td>
+                                                        <td class="mono" style="word-break: break-all;">@(c.OldValue ?? "")</td>
+                                                        <td class="mono" style="word-break: break-all;">@(c.NewValue ?? "")</td>
+                                                    </tr>
+                                                }
+                                            </tbody>
+                                        </table>
+                                    </td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            @if (_applying)
+            {
+                <RadzenProgressBar Value="@_progress" Max="@_progressTotal" ShowValue="true" Unit="@($" of {_progressTotal}")" />
+            }
+
+            @if (CanSelect)
+            {
+                <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" JustifyContent="JustifyContent.End">
+                    @if (_proposal.Status == TagProposalStatus.Pending)
+                    {
+                        <RadzenButton Text="Discard" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small" Click="@Discard" Disabled="@_applying" />
+                    }
+                    <RadzenButton Text="@ApplyText" Icon="done_all" ButtonStyle="ButtonStyle.Primary" Size="ButtonSize.Small"
+                                  Click="@ApplyAsync" IsBusy="@_applying" BusyText="Applying..." Disabled="@(SelectedDiffs.Count == 0)" />
+                </RadzenStack>
+            }
+            else if (_proposal.Status is TagProposalStatus.Applied or TagProposalStatus.PartiallyApplied)
+            {
+                <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">Outcome: @_proposal.OutcomeSummary.</RadzenText>
+            }
+        </RadzenStack>
+    }
+</RadzenCard>
+
+@code {
+    [Parameter, EditorRequired] public string ProposalId { get; set; } = "";
+
+    private TagProposal? _proposal;
+    private InventorySession? _session;
+    private string? _sessionKey;
+    private bool _applying;
+    private int _progress;
+    private int _progressTotal;
+    private readonly HashSet<string> _expanded = new(StringComparer.OrdinalIgnoreCase);
+    private readonly CancellationTokenSource _cts = new();
+
+    private List<ResourceTagDiff> Valid => _proposal?.Diffs.Where(d => d.IsValid && !d.IsEmpty).ToList() ?? [];
+
+    private bool CanSelect => Writer.IsEnabled && !_applying
+                              && _proposal?.Status is TagProposalStatus.Pending or TagProposalStatus.PartiallyApplied;
+
+    private bool IsStale => _proposal is not null
+                            && DateTimeOffset.UtcNow - _proposal.ScanUtc > TimeSpan.FromHours(TaggingOptions.Value.StaleScanWarningHours);
+
+    private List<ResourceTagDiff> SelectedDiffs => _proposal is null
+        ? []
+        : _proposal.Diffs.Where(d => d.IsValid && !d.IsEmpty && _proposal.SelectedResourceIds.Contains(d.ResourceId)
+                                     && _proposal.Results.GetValueOrDefault(d.ResourceId)?.Outcome != TagWriteOutcome.Succeeded).ToList();
+
+    private string ApplyText
+    {
+        get
+        {
+            var n = SelectedDiffs.Sum(d => d.Changes.Count);
+            return _proposal?.Status == TagProposalStatus.PartiallyApplied ? $"Retry {n} change(s)" : $"Apply {n} change(s)";
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var user = await UserContext.GetUserAsync();
+        _sessionKey = InventorySessionStore.KeyFor(user);
+        _session = Store.Get(user);
+        _proposal = _session is null ? null : Proposals.Get(_session, ProposalId);
+    }
+
+    protected override void OnInitialized() => Store.TagsChanged += OnTagsChanged;
+
+    private void SelectAll()
+    {
+        foreach (var d in Valid.Where(d => _proposal!.Results.GetValueOrDefault(d.ResourceId)?.Outcome != TagWriteOutcome.Succeeded))
+        {
+            _proposal!.SelectedResourceIds.Add(d.ResourceId);
+        }
+    }
+
+    private void Toggle(string id, bool selected)
+    {
+        if (selected) _proposal!.SelectedResourceIds.Add(id);
+        else _proposal!.SelectedResourceIds.Remove(id);
+    }
+
+    private void ToggleExpanded(string id)
+    {
+        if (!_expanded.Remove(id)) _expanded.Add(id);
+    }
+
+    private void Discard()
+    {
+        if (_proposal is null) return;
+        _proposal.Status = TagProposalStatus.Discarded;
+        _proposal.SelectedResourceIds.Clear();
+    }
+
+    private async Task ApplyAsync()
+    {
+        if (_proposal is null || _session is null) return;
+        if (Proposals.IsExpired(_session, _proposal))
+        {
+            _proposal.Status = TagProposalStatus.Expired;
+            Notifications.Notify(NotificationSeverity.Warning, "Proposal expired", "Ask again to create a fresh proposal.");
+            return;
+        }
+
+        var diffs = SelectedDiffs;
+        if (diffs.Count == 0) return;
+        _applying = true;
+        _progress = 0;
+        _progressTotal = diffs.Count;
+        _proposal.Status = TagProposalStatus.Applying;
+        StateHasChanged();
+
+        try
+        {
+            var progress = new Progress<(int Done, int Total)>(p =>
+            {
+                _progress = p.Done;
+                _ = InvokeAsync(StateHasChanged);
+            });
+            var results = await Writer.ApplyManyAsync(diffs, progress, _cts.Token);
+            foreach (var r in results)
+            {
+                _proposal.Results[r.ResourceId] = r;
+                if (r.Outcome == TagWriteOutcome.Succeeded) _proposal.SelectedResourceIds.Remove(r.ResourceId);
+            }
+
+            var allDone = Valid.All(d => _proposal.Results.GetValueOrDefault(d.ResourceId)?.Outcome == TagWriteOutcome.Succeeded);
+            _proposal.Status = allDone ? TagProposalStatus.Applied : TagProposalStatus.PartiallyApplied;
+            Notifications.Notify(allDone ? NotificationSeverity.Success : NotificationSeverity.Warning, "Tag proposal applied",
+                $"{_proposal.Succeeded} succeeded, {_proposal.Failed} failed.");
+        }
+        catch (InvalidOperationException ex)
+        {
+            _proposal.Status = TagProposalStatus.Pending;
+            Notifications.Notify(NotificationSeverity.Error, "Tag proposal not applied", ex.Message);
+        }
+        catch (OperationCanceledException)
+        {
+            _proposal.Status = TagProposalStatus.PartiallyApplied;
+        }
+        finally
+        {
+            _applying = false;
+        }
+    }
+
+    private void OnTagsChanged(string sessionKey, string resourceId)
+    {
+        if (sessionKey != _sessionKey || _applying || _proposal?.Diffs.Any(d => d.ResourceId.Equals(resourceId, StringComparison.OrdinalIgnoreCase)) != true) return;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private static BadgeStyle StatusStyle(TagProposalStatus status) => status switch
+    {
+        TagProposalStatus.Applied => BadgeStyle.Success,
+        TagProposalStatus.PartiallyApplied => BadgeStyle.Warning,
+        TagProposalStatus.Discarded or TagProposalStatus.Expired => BadgeStyle.Secondary,
+        _ => BadgeStyle.Info
+    };
+
+    private static BadgeStyle KindStyle(TagChangeKind kind) => kind switch
+    {
+        TagChangeKind.Add => BadgeStyle.Success,
+        TagChangeKind.Remove => BadgeStyle.Danger,
+        _ => BadgeStyle.Warning
+    };
+
+    private static string ResultIcon(TagWriteOutcome outcome) => outcome switch
+    {
+        TagWriteOutcome.Succeeded => "check_circle",
+        TagWriteOutcome.Conflict => "sync_problem",
+        TagWriteOutcome.Forbidden or TagWriteOutcome.PolicyDenied => "block",
+        _ => "error"
+    };
+
+    public void Dispose()
+    {
+        Store.TagsChanged -= OnTagsChanged;
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+}

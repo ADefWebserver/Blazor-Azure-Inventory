@@ -26,6 +26,12 @@ public sealed record AzureResourceInfo(
     string? Endpoint,                // FQDN / URI host - never contains credentials
     IReadOnlyDictionary<string, string> Properties)
 {
+    public static readonly IReadOnlyDictionary<string, string> EmptyTags =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Azure tags. Names are case-insensitive; values are case-sensitive.</summary>
+    public IReadOnlyDictionary<string, string> Tags { get; init; } = EmptyTags;
+
     public string? Prop(string key) => Properties.TryGetValue(key, out var v) ? v : null;
 }
 
@@ -38,9 +44,15 @@ public sealed record ScanIssue(string? ResourceId, string Stage, ScanIssueKind K
 
 public sealed record TenantInfo(string TenantId, string DisplayName, string? DefaultDomain, bool RequiresInteraction = false);
 
-public sealed record SubscriptionInfo(string SubscriptionId, string DisplayName, string TenantId, string State);
+public sealed record SubscriptionInfo(string SubscriptionId, string DisplayName, string TenantId, string State)
+{
+    public IReadOnlyDictionary<string, string> Tags { get; init; } = AzureResourceInfo.EmptyTags;
+}
 
-public sealed record ResourceGroupInfo(string Id, string Name, string SubscriptionId, string TenantId, string Location);
+public sealed record ResourceGroupInfo(string Id, string Name, string SubscriptionId, string TenantId, string Location)
+{
+    public IReadOnlyDictionary<string, string> Tags { get; init; } = AzureResourceInfo.EmptyTags;
+}
 
 public sealed record InventorySnapshot(
     DateTimeOffset ScannedUtc,

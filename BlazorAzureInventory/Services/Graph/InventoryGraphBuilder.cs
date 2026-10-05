@@ -101,15 +101,20 @@ public sealed class InventoryGraphBuilder(ResourceMatcher matcher, ILogger<Inven
             nodes[id] = new GraphNode
             {
                 Id = id, Type = nameof(AzureResourceKind.Subscription), Label = s.DisplayName,
-                Data = new() { ["subscriptionId"] = s.SubscriptionId, ["state"] = s.State, ["tenantId"] = s.TenantId }
+                Data = new()
+                {
+                    ["subscriptionId"] = s.SubscriptionId, ["state"] = s.State, ["tenantId"] = s.TenantId,
+                    [TagKeys.Tags] = CopyTags(s.Tags), [TagKeys.Taggable] = true
+                }
             };
             AddEdge(edges, $"tenant:{s.TenantId}", EdgeTypes.Contains, id);
         }
 
         var groups = snapshot.ResourceGroups
-            .Select(g => (Id: g.Id.ToLowerInvariant(), g.Name, g.SubscriptionId, g.Location, g.TenantId))
+            .Select(g => (Id: g.Id.ToLowerInvariant(), g.Name, g.SubscriptionId, g.Location, g.TenantId, g.Tags))
             .Concat(snapshot.Resources.Select(r =>
-                (Id: ResourceGroupId(r.SubscriptionId, r.ResourceGroup), Name: r.ResourceGroup, r.SubscriptionId, Location: "", r.TenantId)))
+                (Id: ResourceGroupId(r.SubscriptionId, r.ResourceGroup), Name: r.ResourceGroup, r.SubscriptionId, Location: "", r.TenantId,
+                 Tags: AzureResourceInfo.EmptyTags)))
             .GroupBy(g => g.Id, StringComparer.OrdinalIgnoreCase)
             .Select(g => g.OrderByDescending(x => x.Location.Length).First());
 
@@ -118,11 +123,18 @@ public sealed class InventoryGraphBuilder(ResourceMatcher matcher, ILogger<Inven
             nodes[g.Id] = new GraphNode
             {
                 Id = g.Id, Type = nameof(AzureResourceKind.ResourceGroup), Label = g.Name,
-                Data = new() { ["location"] = g.Location, ["subscriptionId"] = g.SubscriptionId, ["resourceGroup"] = g.Name, ["tenantId"] = g.TenantId }
+                Data = new()
+                {
+                    ["location"] = g.Location, ["subscriptionId"] = g.SubscriptionId, ["resourceGroup"] = g.Name, ["tenantId"] = g.TenantId,
+                    [TagKeys.Tags] = CopyTags(g.Tags), [TagKeys.Taggable] = true
+                }
             };
             AddEdge(edges, $"/subscriptions/{g.SubscriptionId}".ToLowerInvariant(), EdgeTypes.Contains, g.Id);
         }
     }
+
+    private static Dictionary<string, string> CopyTags(IReadOnlyDictionary<string, string> tags) =>
+        new(tags, StringComparer.OrdinalIgnoreCase);
 
     private static List<AzureResourceInfo> ApplyContainerCap(
         IReadOnlyList<AzureResourceInfo> resources, HashSet<string?> referencedIds, int cap,
@@ -168,6 +180,8 @@ public sealed class InventoryGraphBuilder(ResourceMatcher matcher, ILogger<Inven
             ["location"] = r.Location
         };
         foreach (var (k, v) in r.Properties) data[k] = v;
+        data[TagKeys.Tags] = CopyTags(r.Tags);
+        data[TagKeys.Taggable] = r.Kind != AzureResourceKind.BlobContainer;
 
         var host = ResourceMatcher.HostOf(r.Endpoint);
         switch (r.Kind)

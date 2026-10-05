@@ -78,3 +78,37 @@ public sealed class AIDefaultOptions
     [Range(0.0, 2.0)] public float Temperature { get; set; } = 0.2f;
     [Range(16, 32768)] public int MaxOutputTokens { get; set; } = 2048;
 }
+
+public sealed class TaggingOptions
+{
+    public bool Enabled { get; set; } = true;
+    [Range(1, 32)] public int MaxParallelWrites { get; set; } = 4;
+    [Range(1, 5000)] public int MaxResourcesPerBatch { get; set; } = 200;
+    [Range(1, 5000)] public int MaxResourcesPerProposal { get; set; } = 200;
+    [Range(1, 1440)] public int ProposalTtlMinutes { get; set; } = 60;
+    [Range(1, 720)] public int StaleScanWarningHours { get; set; } = 24;
+    [Range(1, 120)] public int PermissionCacheMinutes { get; set; } = 10;
+    public ConnectionTagOptions Connections { get; set; } = new();
+}
+
+/// <summary>Arrays default to empty because the configuration binder appends to pre-populated arrays.</summary>
+public sealed class ConnectionTagOptions
+{
+    public string Prefix { get; set; } = "conn";
+    public string OutSegment { get; set; } = "out";
+    public string InSegment { get; set; } = "in";
+    public string UpdatedTagName { get; set; } = "conn-updated";
+    public string Separator { get; set; } = ";";
+    [Range(16, 256)] public int MaxValueLength { get; set; } = 256;
+    public bool IncludeStructural { get; set; }
+    public bool IncludeLowConfidence { get; set; }
+    public bool IncludeExternal { get; set; } = true;
+    public bool WriteWhenEmpty { get; set; } = true;
+    public string[] EdgeTypes { get; set; } = [];
+
+    public IReadOnlyList<string> EffectiveEdgeTypes =>
+        EdgeTypes.Length > 0 ? EdgeTypes : ["CONNECTS_TO", "PULLS_IMAGE_FROM", "REFERENCES_SECRET"];
+
+    public string OutPrefix => $"{Prefix}-{OutSegment}-";
+    public string InPrefix => $"{Prefix}-{InSegment}-";
+}

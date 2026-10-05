@@ -1,0 +1,117 @@
+@* Non-AI bulk connection tagging. Builds the same proposal the AI tool builds; nothing is written until Apply. *@
+@using Microsoft.Extensions.Options
+@using BlazorAzureInventory.Models.Options
+@inject InventorySessionStore Store
+@inject UserContextAccessor UserContext
+@inject ConnectionTagGenerator Generator
+@inject TagProposalStore Proposals
+@inject IOptions<TaggingOptions> TaggingOptions
+
+<RadzenStack Gap="1rem">
+    @if (_session?.Index is null || _session.Snapshot is null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Info" Shade="Shade.Lighter" AllowClose="false">No scan available. Run a scan first.</RadzenAlert>
+    }
+    else if (_proposalId is not null)
+    {
+        <TagProposalCard ProposalId="@_proposalId" />
+        <RadzenButton Text="Start over" Icon="arrow_back" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small" Style="align-self: flex-start;"
+                      Click="@(() => _proposalId = null)" />
+    }
+    else
+    {
+        <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">
+            Writes <span class="mono">@($"{TaggingOptions.Value.Connections.OutPrefix}<Type>")</span> and
+            <span class="mono">@($"{TaggingOptions.Value.Connections.InPrefix}<Type>")</span> tags that list what each resource connects to,
+            grouped by type, so reporting and discovery tools can use them. Existing connection tags that no longer match are removed;
+            other tags are never touched. You review every change before anything is written.
+        </RadzenText>
+
+        <RadzenStack Orientation="Orientation.Horizontal" Gap="1rem" Wrap="FlexWrap.Wrap">
+            <RadzenStack Gap="0.25rem" Style="min-width: 240px; flex: 1;">
+                <RadzenLabel Text="Subscription" Component="bulk-sub" />
+                <RadzenDropDown TValue="string" Name="bulk-sub" Data="@_subscriptions" TextProperty="Value" ValueProperty="Key" AllowClear="true"
+                                @bind-Value="_subscriptionId" Placeholder="All subscriptions" Style="width: 100%;" />
+            </RadzenStack>
+            <RadzenStack Gap="0.25rem" Style="min-width: 240px; flex: 1;">
+                <RadzenLabel Text="Resource group" Component="bulk-rg" />
+                <RadzenDropDown TValue="string" Name="bulk-rg" Data="@_groups" AllowClear="true" AllowFiltering="true"
+                                @bind-Value="_resourceGroup" Placeholder="All resource groups" Style="width: 100%;" />
+            </RadzenStack>
+            <RadzenStack Gap="0.25rem" Style="min-width: 240px; flex: 1;">
+                <RadzenLabel Text="Resource types" Component="bulk-types" />
+                <RadzenDropDown TValue="List<string>" Name="bulk-types" Data="@_types" Multiple="true" Chips="true" AllowClear="true"
+                                @bind-Value="_selectedTypes" Placeholder="All types" Style="width: 100%;" />
+            </RadzenStack>
+        </RadzenStack>
+
+        <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">
+            @MatchCount resource(s) in scope • limit @TaggingOptions.Value.MaxResourcesPerProposal per proposal •
+            scan @_session.Snapshot.ScannedUtc.ToString("yyyy-MM-dd HH:mm 'UTC'")
+        </RadzenText>
+
+        @if (_message is not null)
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Info" Shade="Shade.Lighter" AllowClose="true" Close="@(() => _message = null)" Size="AlertSize.Small">@_message</RadzenAlert>
+        }
+
+        <RadzenButton Text="Preview changes" Icon="preview" ButtonStyle="ButtonStyle.Primary" Style="align-self: flex-start;" Click="@Preview"
+                      Disabled="@(MatchCount == 0 || MatchCount > TaggingOptions.Value.MaxResourcesPerProposal)" />
+    }
+</RadzenStack>
+
+@code {
+    private InventorySession? _session;
+    private List<KeyValuePair<string, string>> _subscriptions = new();
+    private List<string> _groups = new();
+    private List<string> _types = new();
+    private string? _subscriptionId;
+    private string? _resourceGroup;
+    private List<string> _selectedTypes = new();
+    private string? _proposalId;
+    private string? _message;
+
+    private int MatchCount => _session?.Index is null ? 0 : Candidates().Count;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _session = Store.Get(await UserContext.GetUserAsync());
+        if (_session?.Index is null || _session.Snapshot is null) return;
+
+        var all = ConnectionTagGenerator.Candidates(_session.Index, null, null, null);
+        _subscriptions = _session.Snapshot.Subscriptions
+            .Select(s => new KeyValuePair<string, string>(s.SubscriptionId, s.DisplayName)).OrderBy(s => s.Value).ToList();
+        _groups = all.Select(n => n.Data.GetValueOrDefault("resourceGroup")?.ToString()).OfType<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(g => g, StringComparer.OrdinalIgnoreCase).ToList();
+        _types = all.Select(n => n.Type).Distinct().OrderBy(t => t).ToList();
+    }
+
+    private List<GraphNode> Candidates()
+    {
+        lock (_session!.SyncRoot)
+        {
+            return ConnectionTagGenerator.Candidates(_session.Index!, _subscriptionId, _resourceGroup, _selectedTypes);
+        }
+    }
+
+    private void Preview()
+    {
+        if (_session?.Index is null || _session.Snapshot is null) return;
+        TagProposal? proposal = null;
+        int upToDate;
+        lock (_session.SyncRoot)
+        {
+            var nodes = ConnectionTagGenerator.Candidates(_session.Index, _subscriptionId, _resourceGroup, _selectedTypes);
+            var (diffs, current) = Generator.BuildProposalDiffs(_session.Index, nodes, _session.Snapshot.ScannedUtc);
+            upToDate = current;
+            if (diffs.Count > 0)
+            {
+                proposal = Proposals.Create(_session, $"Connection tags for {diffs.Count(d => !d.IsEmpty)} resource(s)",
+                    "Generated from the knowledge graph on the Inventory page.", diffs);
+            }
+        }
+
+        if (proposal is null) _message = $"All {upToDate} resource(s) already have up-to-date connection tags.";
+        else _proposalId = proposal.Id;
+    }
+}

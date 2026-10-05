@@ -1,0 +1,48 @@
+@* Scalar properties of a node. Keys and values are tenant-controlled and rendered as encoded text only. *@
+@inject IJSRuntime JS
+
+<RadzenStack Gap="0.5rem">
+    @if (ShowFilter)
+    {
+        <RadzenTextBox @bind-Value="_filter" Immediate="true" Placeholder="Filter properties..." Style="width: 100%;" aria-label="Filter properties" />
+    }
+    <RadzenDataList TItem="KeyValuePair<string, string>" Data="@Filtered" WrapItems="false" AllowPaging="false">
+        <Template Context="p">
+            <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" Gap="0.5rem">
+                <RadzenText TextStyle="TextStyle.Body2" class="muted rz-m-0">@p.Key</RadzenText>
+                <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem" Style="min-width: 0;">
+                    <RadzenText TextStyle="TextStyle.Body2" class="mono rz-m-0" Style="word-break: break-all; text-align: right;">@p.Value</RadzenText>
+                    @if (ShowCopy)
+                    {
+                        <RadzenButton Icon="content_copy" Variant="Variant.Text" Size="ButtonSize.ExtraSmall" title="@($"Copy {p.Key}")"
+                                      Click="@(() => CopyAsync(p.Value))" />
+                    }
+                </RadzenStack>
+            </RadzenStack>
+        </Template>
+    </RadzenDataList>
+</RadzenStack>
+
+@code {
+    [Parameter] public IReadOnlyList<KeyValuePair<string, string>> Properties { get; set; } = [];
+    [Parameter] public bool ShowFilter { get; set; }
+    [Parameter] public bool ShowCopy { get; set; }
+
+    private string _filter = "";
+
+    private IEnumerable<KeyValuePair<string, string>> Filtered => string.IsNullOrWhiteSpace(_filter)
+        ? Properties
+        : Properties.Where(p => p.Key.Contains(_filter, StringComparison.OrdinalIgnoreCase) || p.Value.Contains(_filter, StringComparison.OrdinalIgnoreCase));
+
+    private async Task CopyAsync(string value)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", value);
+        }
+        catch (JSException)
+        {
+            // Clipboard access can be denied by the browser; nothing else to do.
+        }
+    }
+}

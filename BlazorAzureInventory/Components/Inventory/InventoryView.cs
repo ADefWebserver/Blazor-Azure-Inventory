@@ -8,6 +8,7 @@ namespace BlazorAzureInventory.Components.Inventory;
 public sealed class AppRow
 {
     public required AzureResourceInfo Resource { get; init; }
+    public int TagCount => Resource.Tags.Count;
     public string Name { get; init; } = "";
     public string Kind { get; init; } = "";
     public string Subscription { get; init; } = "";
@@ -24,6 +25,7 @@ public sealed class AppRow
 public sealed class SqlServerRow
 {
     public required AzureResourceInfo Resource { get; init; }
+    public int TagCount => Resource.Tags.Count;
     public string Server => Resource.Name;
     public string Fqdn => Resource.Endpoint ?? "";
     public string Subscription { get; init; } = "";
@@ -36,6 +38,7 @@ public sealed class SqlServerRow
 public sealed class StorageRow
 {
     public required AzureResourceInfo Resource { get; init; }
+    public int TagCount => Resource.Tags.Count;
     public string Account => Resource.Name;
     public string Kind => Resource.Prop("kind") ?? "";
     public string Sku => Resource.Prop("sku") ?? "";
@@ -50,6 +53,7 @@ public sealed class StorageRow
 public sealed class ChildRow
 {
     public required AzureResourceInfo Resource { get; init; }
+    public int TagCount => Resource.Tags.Count;
     public string Name => Resource.Name;
     public string Sku => Resource.Prop("sku") ?? "";
     public string Status => Resource.Prop("status") ?? "";
@@ -61,6 +65,7 @@ public sealed class ChildRow
 public sealed class ContainerAppRow
 {
     public required AzureResourceInfo Resource { get; init; }
+    public int TagCount => Resource.Tags.Count;
     public string Name => Resource.Name;
     public string Environment => (Resource.Prop("environmentId") ?? "").Split('/')[^1];
     public string Images => Resource.Prop("images") ?? "";
@@ -73,6 +78,7 @@ public sealed class ContainerAppRow
 public sealed class SimpleRow
 {
     public required AzureResourceInfo Resource { get; init; }
+    public int TagCount => Resource.Tags.Count;
     public string Type { get; init; } = "";
     public string Name => Resource.Name;
     public string EndpointHost => ResourceMatcher.HostOf(Resource.Endpoint) ?? "";

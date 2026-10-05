@@ -1,0 +1,42 @@
+@* Overview of one resource. All values are tenant-controlled and rendered as encoded text. *@
+<table class="roles-table resource-overview">
+    <tbody>
+        <tr><th>Name</th><td class="mono">@Details.Label</td></tr>
+        <tr>
+            <th>Type</th>
+            <td>
+                <span class="type-swatch" style="background: @NodeTypeStyles.ColorOf(Details.Type);"></span>@Details.Type
+                @if (Details.ArmType is { } arm)
+                {
+                    <span class="mono muted"> (@arm)</span>
+                }
+            </td>
+        </tr>
+        @if (Details.SubscriptionId is not null)
+        {
+            <tr><th>Subscription</th><td>@(Details.SubscriptionName ?? Details.SubscriptionId) <span class="mono muted">@Details.SubscriptionId</span></td></tr>
+        }
+        @if (Details.ResourceGroup is not null)
+        {
+            <tr><th>Resource group</th><td class="mono">@Details.ResourceGroup</td></tr>
+        }
+        @if (Details.Location is not null)
+        {
+            <tr><th>Location</th><td>@Details.Location</td></tr>
+        }
+        @if (Details.Endpoint is not null)
+        {
+            <tr><th>Endpoint</th><td class="mono">@Details.Endpoint</td></tr>
+        }
+        <tr><th>Resource ID</th><td class="mono" style="word-break: break-all;">@Details.Id</td></tr>
+        <tr><th>Data from scan</th><td>@Details.ScannedUtc.ToString("yyyy-MM-dd HH:mm 'UTC'")</td></tr>
+    </tbody>
+</table>
+@if (Details.PortalUrl is { } url)
+{
+    <RadzenLink Path="@url" Target="_blank" Text="Open in Azure portal" Icon="open_in_new" rel="noopener noreferrer" class="rz-mt-2" />
+}
+
+@code {
+    [Parameter, EditorRequired] public ResourceDetails Details { get; set; } = default!;
+}

@@ -8,12 +8,17 @@
                              BadgeStyle="@(r.Type switch { "Key Vault" => BadgeStyle.Warning, "Redis" => BadgeStyle.Danger, "Cosmos DB" => BadgeStyle.Primary, _ => BadgeStyle.Secondary })" />
             </Template>
         </RadzenDataGridColumn>
-        <RadzenDataGridColumn Property="@nameof(SimpleRow.Name)" Title="Name" />
+        <RadzenDataGridColumn Property="@nameof(SimpleRow.Name)" Title="Name">
+            <Template Context="r"><ResourceLink Id="@r.Resource.Id" Text="@r.Name" /></Template>
+        </RadzenDataGridColumn>
         <RadzenDataGridColumn Property="@nameof(SimpleRow.EndpointHost)" Title="Endpoint host" />
         <RadzenDataGridColumn Property="@nameof(SimpleRow.Consumers)" Title="Consumers" Width="120px">
             <Template Context="r">
                 <RadzenLink Text="@r.Consumers.ToString()" Path="@($"graph?focus={Uri.EscapeDataString(r.Resource.Id)}")" title="Show in graph" />
             </Template>
+        </RadzenDataGridColumn>
+        <RadzenDataGridColumn Property="@nameof(SimpleRow.TagCount)" Title="Tags" Width="90px">
+            <Template Context="r"><TagCountLink Id="@r.Resource.Id" Text="@r.Name" Count="@r.TagCount" /></Template>
         </RadzenDataGridColumn>
     </Columns>
 </RadzenDataGrid>

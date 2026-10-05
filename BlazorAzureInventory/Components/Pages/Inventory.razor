@@ -13,6 +13,7 @@
 @inject NotificationService Notifications
 @inject NavigationManager Nav
 @inject MicrosoftIdentityConsentAndConditionalAccessHandler ConsentHandler
+@inject Microsoft.Extensions.Options.IOptions<BlazorAzureInventory.Models.Options.TaggingOptions> TaggingOptions
 
 <PageTitle>Inventory - Azure Inventory</PageTitle>
 
@@ -36,6 +37,11 @@
             @if (_scanning)
             {
                 <RadzenButton Text="Cancel" Icon="stop" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Outlined" Click="@Cancel" />
+            }
+            else if (TaggingOptions.Value.Enabled)
+            {
+                <RadzenButton Text="Tag connections..." Icon="sell" ButtonStyle="ButtonStyle.Light" Click="@OpenBulkTaggingAsync"
+                              Disabled="@(_snapshot is null)" title="Write conn-out-* and conn-in-* tags that list what each resource connects to" />
             }
         </RadzenStack>
     </RadzenStack>
@@ -120,10 +126,13 @@
     private InventoryView? _view;
     private CancellationTokenSource? _cts;
     private DateTime _lastProgressRender;
+    private string? _sessionKey;
 
     protected override async Task OnInitializedAsync()
     {
         var user = await UserContext.GetUserAsync();
+        _sessionKey = InventorySessionStore.KeyFor(user);
+        Store.TagsChanged += OnTagsChanged;
         if (Store.Get(user) is { Snapshot: { } snapshot } session)
         {
             _snapshot = snapshot;
@@ -216,6 +225,30 @@
     private void ViewConfiguration(AzureResourceInfo resource) =>
         Nav.NavigateTo($"appconfiguration?id={Uri.EscapeDataString(resource.Id)}");
 
+    private Task OpenBulkTaggingAsync() =>
+        DialogService.OpenAsync<BulkConnectionTagDialog>("Tag connections", new Dictionary<string, object?>(),
+            new DialogOptions { Width = "1000px", Resizable = true, Draggable = true, CloseDialogOnEsc = true });
+
+    /// <summary>Rebuilds grid rows after a tag write so the Tags columns stay current. Re-renders are coalesced.</summary>
+    private int _tagRefreshPending;
+
+    private void OnTagsChanged(string sessionKey, string resourceId)
+    {
+        if (sessionKey != _sessionKey || Interlocked.Exchange(ref _tagRefreshPending, 1) == 1) return;
+        _ = InvokeAsync(async () =>
+        {
+            await Task.Delay(250);
+            Interlocked.Exchange(ref _tagRefreshPending, 0);
+            var session = Store.Get(await UserContext.GetUserAsync());
+            if (session?.Snapshot is { } snapshot && !_scanning)
+            {
+                _snapshot = snapshot;
+                _view = InventoryView.Build(snapshot, session.Index);
+                StateHasChanged();
+            }
+        });
+    }
+
     private IEnumerable<(string Label, string Icon, string Count, string Caption)> SummaryCards()
     {
         string N(int? v) => v?.ToString() ?? "-";
@@ -244,6 +277,7 @@
 
     public void Dispose()
     {
+        Store.TagsChanged -= OnTagsChanged;
         _cts?.Cancel();
         _cts?.Dispose();
     }

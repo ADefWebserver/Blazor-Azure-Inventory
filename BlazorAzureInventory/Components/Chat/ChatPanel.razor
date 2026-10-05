@@ -1,8 +1,10 @@
 @implements IAsyncDisposable
 @inject IJSRuntime JS
+@inject ResourceDialogLauncher Launcher
 
 <RadzenStack Gap="0.75rem" Style="flex: 1; min-height: 0;">
-    <MessageList Messages="@Messages" Module="@_module">
+    <div @ref="_linkRoot" class="chat-link-root">
+    <MessageList Messages="@Messages" Module="@_module" IsKnownResource="@IsKnownResource">
         @if (Messages.Count == 0)
         {
             <RadzenStack AlignItems="AlignItems.Center" Gap="0.75rem" class="rz-p-8">
@@ -18,6 +20,7 @@
             </RadzenStack>
         }
     </MessageList>
+    </div>
     <MessageInput IsBusy="@IsBusy" Disabled="@Disabled" OnSend="@OnSend" OnStop="@OnStop" OnClear="@OnClear" Module="@_module" />
 </RadzenStack>
 
@@ -28,6 +31,7 @@
         "Which storage accounts are shared by several apps?",
         "Which databases does no app reference?",
         "Which apps keep secrets in plain app settings?",
+        "Add tags to each resource listing what it connects to, by type",
         "Is contoso-sql healthy?"
     ];
 
@@ -38,15 +42,30 @@
     [Parameter] public EventCallback OnStop { get; set; }
     [Parameter] public EventCallback OnClear { get; set; }
 
+    /// <summary>Returns true for node IDs in the user's last scan; other resource links render as plain text.</summary>
+    [Parameter] public Func<string, bool>? IsKnownResource { get; set; }
+
     private IJSObjectReference? _module;
+    private ElementReference _linkRoot;
+    private DotNetObjectReference<ChatPanel>? _selfRef;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
         {
             _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/chat.js");
+            _selfRef = DotNetObjectReference.Create(this);
+            await _module.InvokeVoidAsync("attachResourceLinks", _linkRoot, _selfRef);
             StateHasChanged();
         }
+    }
+
+    [JSInvokable]
+    public Task OpenResource(string id, string? text)
+    {
+        // The ID comes from the browser; only IDs in the user's own scan are opened.
+        if (string.IsNullOrWhiteSpace(id) || IsKnownResource?.Invoke(id) != true) return Task.CompletedTask;
+        return InvokeAsync(() => Launcher.OpenAsync(id, string.IsNullOrWhiteSpace(text) ? null : text));
     }
 
     public async ValueTask DisposeAsync()
@@ -59,5 +78,6 @@
         {
             // The circuit is gone.
         }
+        _selfRef?.Dispose();
     }
 }

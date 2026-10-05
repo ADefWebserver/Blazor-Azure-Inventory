@@ -48,6 +48,38 @@ export function init(containerId, dotNetRef) {
         highlight(null);
         dotNet?.invokeMethodAsync('OnNodeSelected', null);
     });
+    network.on('doubleClick', e => {
+        if (e.nodes.length > 0) dotNet?.invokeMethodAsync('OnNodeOpen', e.nodes[0]);
+    });
+    network.on('selectEdge', e => {
+        // Clicking a node also selects its edges; only report direct edge clicks.
+        if (e.nodes.length === 0 && e.edges.length > 0) dotNet?.invokeMethodAsync('OnEdgeSelected', e.edges[0]);
+    });
+    network.on('deselectEdge', e => {
+        if ((e.nodes ?? []).length === 0) dotNet?.invokeMethodAsync('OnEdgeSelected', null);
+    });
+}
+
+// Keeps the client copy of a node's tags in sync after a tag write, so the tag filter stays accurate.
+export function updateNodeTags(id, tags) {
+    const node = rawNodes.find(n => n.id === id);
+    if (!node) return;
+    node.data = { ...(node.data ?? {}), tags: tags ?? {} };
+    if (lastFilter) applyFilter(lastFilter);
+}
+
+function matchesTag(n, tagName, tagValue) {
+    const tags = n.data?.tags;
+    if (!tags) return false;
+    const wanted = tagName.toLowerCase();
+    const overflow = new RegExp('^' + wanted.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '-\\d+$');
+    const value = (tagValue ?? '').toLowerCase();
+    for (const [k, v] of Object.entries(tags)) {
+        const key = k.toLowerCase();
+        if (key !== wanted && !overflow.test(key)) continue;
+        if (!value || String(v).toLowerCase().includes(value)) return true;
+    }
+    return false;
 }
 
 export async function renderFromStream(streamRef) {
@@ -83,6 +115,7 @@ export function applyFilter(filter) {
     const types = new Set(filter.nodeTypes ?? []);
     const subs = new Set((filter.subscriptions ?? []).map(s => s.toLowerCase()));
     const groups = new Set((filter.resourceGroups ?? []).map(g => g.toLowerCase()));
+    const tagName = (filter.tagName ?? '').trim();
 
     const visible = new Set();
     for (const n of rawNodes) {
@@ -92,6 +125,7 @@ export function applyFilter(filter) {
         if (show && groups.size > 0 && d.resourceGroup) show = groups.has(String(d.resourceGroup).toLowerCase());
         if (show && filter.hideExternal && n.type === 'External') show = false;
         if (show && filter.hideEmulator && d.isLocalEmulator === true) show = false;
+        if (show && tagName) show = matchesTag(n, tagName, filter.tagValue);
         if (show) visible.add(n.id);
     }
 

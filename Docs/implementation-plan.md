@@ -58,6 +58,7 @@ These decisions were confirmed with the product owner before this plan was writt
 | AI chat | **In the initial scope.** Providers: OpenAI, Azure OpenAI, Microsoft Foundry, Anthropic, Google AI |
 | AI settings UI | Port [`AIServiceSettingsEditor.razor`](https://github.com/Blazor-Data-Orchestrator/BlazorDataOrchestrator/blob/main/src/BlazorOrchestrator.Web/Components/Shared/AIServiceSettingsEditor.razor) from BlazorDataOrchestrator |
 | AI credentials | **Per user.** Each user enters their own API key. Keys are kept only in their in-memory session and never persisted |
+| Tags (added later) | The only write: Azure tags, edited in the Resource Properties popup or proposed by AI chat and applied by the user. See [tags-feature-plan.md](./tags-feature-plan.md) |
 
 ---
 

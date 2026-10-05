@@ -31,6 +31,7 @@ The plan builds on the architecture in [implementation-plan.md](./implementation
 18. [Implementation Phases](#18-implementation-phases)
 19. [Acceptance Criteria](#19-acceptance-criteria)
 20. [Risks and Open Questions](#20-risks-and-open-questions)
+21. [Implementation Notes](#21-implementation-notes)
 
 ---
 
@@ -1221,3 +1222,26 @@ flowchart LR
 | 6 | **Name collisions** across subscriptions (for example two `orders` databases on servers with the same name in different subscriptions) | The `server/database` form reduces this. Add an optional `Tagging:Connections:QualifyWithResourceGroup` setting (`rg/name`) if needed |
 | 7 | **Open question:** Should blob container metadata be editable in a later release? | Out of scope now. It would need the data-plane Blob API and Storage Blob Data Contributor |
 | 8 | **Open question:** Should `conn-*` tags also be written to resource groups (aggregated)? | Not planned. Can be added with a generator option if reporting needs it |
+
+---
+
+## 21. Implementation Notes
+
+The plan is implemented. These notes record where the code differs from the text above.
+
+| Area | As built |
+|---|---|
+| Tag writes | `ITagStore.PatchAsync` uses the Tags **PATCH** API: `Delete` for removed tags (name and current value), then `Merge` for adds and updates, instead of a full `PUT`. Tags the user did not touch are never sent back to ARM, so Azure-created tags with names that would otherwise be invalid (for example `hidden-link: /app-insights-resource-id`) survive. The conflict check still re-reads the tags first |
+| Validation of existing tags | `TagValidator.ValidateSet(tags, armType, existing)` applies name and value rules only to added or changed tags. Set-level rules (50-tag limit, duplicates, whether the type can be tagged) apply to the whole set |
+| `ResourceTagDiff` | Also carries `ArmType`, `TenantId`, `Warnings`, and `Errors`. `TagWriteService.ApplyAsync(diff, ct)` ignores the client-supplied tenant and type and reads them from the session's graph node |
+| Permission check | `ITagPermissionChecker` (implemented by `TagPermissionChecker`) so components can be tested without ARM |
+| `TagProposalCard` | Lives in `Components/Resources/` because both the chat and `BulkConnectionTagDialog` use it |
+| Shared helpers | `TagRow` and `TagDiffBuilder` (`Services/Tags/TagDiffBuilder.cs`), `GraphNodeResolver` (shared ID or name resolution for graph and tag tools), `TagKeys` (`GetTags()` and `IsTaggable()` extensions on `GraphNode`), `TagCountLink` (Tags column in grids) |
+| Subscription tags | `ResourceGraphInventoryService.QueryWithSubscriptionTagsAsync` returns them from the `resourcecontainers` query, and `InventoryScanOrchestrator` merges them into the snapshot. `AzureContextService` is unchanged |
+| Inventory grids | Resource names are `ResourceLink`s, and every grid has a **Tags** count column that opens the popup on the Tags tab. A separate **Details** button was not added, because `ResourceLink` is already keyboard accessible |
+| Tool cards | `ToolCallCard` shows no tool results by design, so resource links appear only in assistant messages |
+| AI outcome feedback | The system prompt lists the status of each proposal in the session (for example `tp_1a2b3c4d: 12 succeeded, 2 failed`) instead of adding a system message to the history |
+| Graph tag filter | Nodes that do not match are hidden, like the other filters, rather than highlighted |
+| `GetNode` graph tool | Excludes `tags`. The model reads tags through `GetTags`, which masks secret-like values |
+
+Tests are in `BlazorAzureInventory.Tests/TagCoreTests.cs`, `TagServiceTests.cs`, and `TagComponentTests.cs`, with the shared `TagTestHost` and the `FakeTagStore` test double.

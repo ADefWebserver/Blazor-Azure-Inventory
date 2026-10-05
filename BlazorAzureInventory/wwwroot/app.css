@@ -82,9 +82,20 @@ h1:focus {
 .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
 @keyframes blink { 0%, 80%, 100% { opacity: 0.2; } 40% { opacity: 1; } }
 
+/* Resource properties popup and tags */
+.resource-link { color: var(--rz-primary); text-decoration: none; cursor: pointer; }
+.resource-link:hover, .resource-link:focus-visible { text-decoration: underline; }
+.page-title .resource-link { color: inherit; }
+.tag-count { font-variant-numeric: tabular-nums; }
+.chat-link-root { display: contents; }
+.tags-table td { vertical-align: top; }
+.tag-proposal-card { max-width: 85%; margin-left: 1.5rem !important; }
+.rz-dialog-content .tag-proposal-card { max-width: 100%; margin-left: 0 !important; }
+.proposal-table-host { max-height: 420px; overflow: auto; }
+
 @media (max-width: 1024px) {
     .graph-page, .chat-page { height: auto; }
-    .bubble-user, .bubble-assistant, .tool-card { max-width: 100%; }
+    .bubble-user, .bubble-assistant, .tool-card, .tag-proposal-card { max-width: 100%; }
 }
 
 .blazor-error-boundary {

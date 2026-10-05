@@ -14,3 +14,16 @@ export function attachEnterToSend(textareaId, dotNetRef) {
         }
     });
 }
+
+// Resource links in assistant messages carry an encoded data-resource-id. The server re-validates the ID against the
+// user's scan before opening anything.
+export function attachResourceLinks(element, dotNetRef) {
+    if (!element || element.dataset.resourceLinks) return;
+    element.dataset.resourceLinks = 'true';
+    element.addEventListener('click', e => {
+        const link = e.target.closest('a.resource-link[data-resource-id]');
+        if (!link || !element.contains(link)) return;
+        e.preventDefault();
+        dotNetRef.invokeMethodAsync('OpenResource', link.dataset.resourceId, link.textContent ?? '');
+    });
+}

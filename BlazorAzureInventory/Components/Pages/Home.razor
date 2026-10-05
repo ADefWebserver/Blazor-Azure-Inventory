@@ -1,4 +1,4 @@
-﻿@page "/"
+@page "/"
 @inject NavigationManager Nav
 @inject InventorySessionStore Store
 @inject SetupStatusService Setup
@@ -24,7 +24,7 @@
                         <RadzenButton Text="Go to Inventory" Icon="arrow_forward" ButtonStyle="ButtonStyle.Primary" Size="ButtonSize.Large"
                                       Click="@(() => Nav.NavigateTo("inventory"))" />
                     </RadzenStack>
-                    <RadzenText TextStyle="TextStyle.Caption" class="muted">Read-only. Secret values are never stored or displayed.</RadzenText>
+                    <RadzenText TextStyle="TextStyle.Caption" class="muted">Read-only, except for tag edits you approve. Secret values are never stored or displayed.</RadzenText>
                 </RadzenStack>
             </RadzenCard>
 
@@ -58,7 +58,7 @@
                     </RadzenText>
                     <RadzenButton Text="Connect to Azure" Icon="login" ButtonStyle="ButtonStyle.Primary" Size="ButtonSize.Large" Click="@SignIn"
                                   Disabled="@missing.Any(SetupStatusService.BlocksSignIn)" />
-                    <RadzenText TextStyle="TextStyle.Caption" class="muted">Read-only. Secret values are never stored or displayed.</RadzenText>
+                    <RadzenText TextStyle="TextStyle.Caption" class="muted">Read-only, except for tag edits you approve. Secret values are never stored or displayed.</RadzenText>
                 </RadzenStack>
             </RadzenCard>
         </NotAuthorized>

@@ -4,7 +4,12 @@
     <Template Context="server">
         <RadzenDataGrid TItem="ChildRow" Data="@server.DatabaseRows" AllowSorting="true" AllowColumnResize="true">
             <Columns>
-                <RadzenDataGridColumn Property="@nameof(ChildRow.Name)" Title="Database" />
+                <RadzenDataGridColumn Property="@nameof(ChildRow.Name)" Title="Database">
+                    <Template Context="db"><ResourceLink Id="@db.Resource.Id" Text="@db.Name" /></Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Property="@nameof(ChildRow.TagCount)" Title="Tags" Width="90px">
+                    <Template Context="db"><TagCountLink Id="@db.Resource.Id" Text="@db.Name" Count="@db.TagCount" /></Template>
+                </RadzenDataGridColumn>
                 <RadzenDataGridColumn Property="@nameof(ChildRow.Sku)" Title="SKU" Width="140px" />
                 <RadzenDataGridColumn Property="@nameof(ChildRow.Status)" Title="Status" Width="140px" />
                 <RadzenDataGridColumn Property="@nameof(ChildRow.Consumers)" Title="Consumers" Width="120px">
@@ -16,12 +21,17 @@
         </RadzenDataGrid>
     </Template>
     <Columns>
-        <RadzenDataGridColumn Property="@nameof(SqlServerRow.Server)" Title="Server" />
+        <RadzenDataGridColumn Property="@nameof(SqlServerRow.Server)" Title="Server">
+            <Template Context="s"><ResourceLink Id="@s.Resource.Id" Text="@s.Server" /></Template>
+        </RadzenDataGridColumn>
         <RadzenDataGridColumn Property="@nameof(SqlServerRow.Fqdn)" Title="FQDN" />
         <RadzenDataGridColumn Property="@nameof(SqlServerRow.Subscription)" Title="Subscription" />
         <RadzenDataGridColumn Property="@nameof(SqlServerRow.ResourceGroup)" Title="Resource Group" />
         <RadzenDataGridColumn Property="@nameof(SqlServerRow.Location)" Title="Location" Width="120px" />
         <RadzenDataGridColumn Property="@nameof(SqlServerRow.Databases)" Title="Databases" Width="120px" />
+        <RadzenDataGridColumn Property="@nameof(SqlServerRow.TagCount)" Title="Tags" Width="90px">
+            <Template Context="s"><TagCountLink Id="@s.Resource.Id" Text="@s.Server" Count="@s.TagCount" /></Template>
+        </RadzenDataGridColumn>
     </Columns>
 </RadzenDataGrid>
 

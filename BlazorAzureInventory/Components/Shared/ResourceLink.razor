@@ -1,0 +1,19 @@
+@* A keyboard-accessible resource name that opens the Resource Properties popup. Text is rendered encoded. *@
+@inject ResourceDialogLauncher Launcher
+
+<a href="#" class="resource-link @CssClass" role="button" title="@($"Show details for {Name}")"
+   @onclick="OpenAsync" @onclick:preventDefault="true" @onclick:stopPropagation="true">@Text</a>
+
+@code {
+    [Parameter, EditorRequired] public string Id { get; set; } = "";
+    [Parameter, EditorRequired] public string Text { get; set; } = "";
+
+    /// <summary>Resource name for the tooltip and dialog title when <see cref="Text"/> is not the name.</summary>
+    [Parameter] public string? ResourceName { get; set; }
+    [Parameter] public string? InitialTab { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+
+    private string Name => ResourceName ?? Text;
+
+    private Task OpenAsync() => Launcher.OpenAsync(Id, Name, InitialTab);
+}

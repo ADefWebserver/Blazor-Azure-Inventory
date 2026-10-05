@@ -5,6 +5,8 @@
 @using BlazorAzureInventory.Services.AI
 @inject ChatService ChatService
 @inject NavigationManager Nav
+@inject InventorySessionStore Store
+@inject UserContextAccessor UserContext
 
 <PageTitle>AI Chat - Azure Inventory</PageTitle>
 
@@ -47,7 +49,7 @@
         }
 
         <ChatPanel Messages="@_messages" IsBusy="@_busy" Disabled="@(_context is not { HasScan: true, ProviderConfigured: true })"
-                   OnSend="@SendAsync" OnStop="@Stop" OnClear="@Clear" />
+                   OnSend="@SendAsync" OnStop="@Stop" OnClear="@Clear" IsKnownResource="@IsKnownResource" />
     </RadzenStack>
 </div>
 
@@ -56,12 +58,19 @@
     private ChatContextInfo? _context;
     private bool _busy;
     private CancellationTokenSource? _cts;
+    private System.Security.Claims.ClaimsPrincipal? _user;
 
     protected override async Task OnInitializedAsync()
     {
+        _user = await UserContext.GetUserAsync();
         _context = await ChatService.GetContextAsync();
         if (_context.ProviderConfigured) _ = CheckLiveToolsAsync();
     }
+
+    private bool IsKnownResource(string id) =>
+        _user is not null
+        && Store.Get(_user)?.Index?.NodesById.TryGetValue(id, out var node) == true
+        && node.Type != nameof(AzureResourceKind.Tenant);
 
     private async Task CheckLiveToolsAsync()
     {
@@ -114,6 +123,9 @@
             case ToolCallStartedEvent s:
                 // Tool cards appear between the question and the answer.
                 _messages.Insert(_messages.IndexOf(answer), new ChatMessageItem { Role = ChatRoleKind.Tool, ToolCall = s.Call });
+                break;
+            case TagProposalCreatedEvent p:
+                _messages.Insert(_messages.IndexOf(answer), new ChatMessageItem { Role = ChatRoleKind.Tool, ProposalId = p.ProposalId });
                 break;
             case ChatErrorEvent err:
                 _messages.Add(new ChatMessageItem { Role = ChatRoleKind.Error, Text = err.Message });

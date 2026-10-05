@@ -36,20 +36,31 @@ public sealed class ResourceGraphInventoryService(ArmClientFactory armFactory, I
         | project id, name, type, kind, location, resourceGroup, subscriptionId, tenantId,
                   endpoint, state = tostring(properties.state), sku = tostring(sku.name),
                   status = tostring(properties.status), hns = tostring(properties.isHnsEnabled),
-                  environmentId = tostring(coalesce(properties.managedEnvironmentId, properties.environmentId))
+                  environmentId = tostring(coalesce(properties.managedEnvironmentId, properties.environmentId)),
+                  tags
         """;
 
     private const string ContainersQuery = """
         resourcecontainers
         | where type in~ ('microsoft.resources/subscriptions', 'microsoft.resources/subscriptions/resourcegroups')
-        | project id, name, type, subscriptionId, tenantId, location
+        | project id, name, type, subscriptionId, tenantId, location, tags
         """;
 
     public async Task<(IReadOnlyList<AzureResourceInfo> Resources, IReadOnlyList<ResourceGroupInfo> Groups)> QueryAsync(
         string tenantId, IReadOnlyList<string> subscriptionIds, CancellationToken ct)
     {
+        var (resources, groups, _) = await QueryWithSubscriptionTagsAsync(tenantId, subscriptionIds, ct);
+        return (resources, groups);
+    }
+
+    /// <summary>Like <see cref="QueryAsync"/>, plus the tags of each subscription keyed by subscription ID.</summary>
+    public async Task<(IReadOnlyList<AzureResourceInfo> Resources, IReadOnlyList<ResourceGroupInfo> Groups,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> SubscriptionTags)> QueryWithSubscriptionTagsAsync(
+        string tenantId, IReadOnlyList<string> subscriptionIds, CancellationToken ct)
+    {
+        var subscriptionTags = new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
         var validIds = subscriptionIds.Where(id => Guid.TryParse(id, out _)).ToList();
-        if (validIds.Count == 0) return ([], []);
+        if (validIds.Count == 0) return ([], [], subscriptionTags);
 
         var client = await armFactory.GetAsync(tenantId);
         TenantResource? tenant = null;
@@ -58,7 +69,7 @@ public sealed class ResourceGraphInventoryService(ArmClientFactory armFactory, I
             tenant = t;
             break;
         }
-        if (tenant is null) return ([], []);
+        if (tenant is null) return ([], [], subscriptionTags);
 
         var resources = new List<AzureResourceInfo>();
         await foreach (var row in QueryRowsAsync(tenant, ResourcesQuery, validIds, ct))
@@ -69,14 +80,40 @@ public sealed class ResourceGraphInventoryService(ArmClientFactory armFactory, I
         var groups = new List<ResourceGroupInfo>();
         await foreach (var row in QueryRowsAsync(tenant, ContainersQuery, validIds, ct))
         {
-            if (Str(row, "type").Equals("microsoft.resources/subscriptions/resourcegroups", StringComparison.OrdinalIgnoreCase))
+            var type = Str(row, "type");
+            if (type.Equals("microsoft.resources/subscriptions/resourcegroups", StringComparison.OrdinalIgnoreCase))
             {
                 groups.Add(new ResourceGroupInfo(Str(row, "id").ToLowerInvariant(), Str(row, "name"),
-                    Str(row, "subscriptionId"), Str(row, "tenantId") is { Length: > 0 } t ? t : tenantId, Str(row, "location")));
+                    Str(row, "subscriptionId"), Str(row, "tenantId") is { Length: > 0 } t ? t : tenantId, Str(row, "location"))
+                {
+                    Tags = ReadTags(row)
+                });
+            }
+            else if (type.Equals("microsoft.resources/subscriptions", StringComparison.OrdinalIgnoreCase))
+            {
+                subscriptionTags[Str(row, "subscriptionId")] = ReadTags(row);
             }
         }
 
-        return (resources, groups);
+        return (resources, groups, subscriptionTags);
+    }
+
+    /// <summary>Reads the <c>tags</c> column. Non-string values are converted to text; case-only duplicate names keep the first.</summary>
+    public static IReadOnlyDictionary<string, string> ReadTags(JsonElement row)
+    {
+        if (!row.TryGetProperty("tags", out var tags) || tags.ValueKind != JsonValueKind.Object) return AzureResourceInfo.EmptyTags;
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in tags.EnumerateObject())
+        {
+            var value = p.Value.ValueKind switch
+            {
+                JsonValueKind.String => p.Value.GetString() ?? "",
+                JsonValueKind.Null or JsonValueKind.Undefined => "",
+                _ => p.Value.GetRawText()
+            };
+            result.TryAdd(p.Name, value);
+        }
+        return result;
     }
 
     private static async IAsyncEnumerable<JsonElement> QueryRowsAsync(
@@ -160,7 +197,10 @@ public sealed class ResourceGraphInventoryService(ArmClientFactory armFactory, I
             id, name, kind.Value, type,
             Str(row, "tenantId") is { Length: > 0 } tid ? tid : tenantId,
             Str(row, "subscriptionId"), Str(row, "resourceGroup"), Str(row, "location"),
-            parentId, string.IsNullOrWhiteSpace(endpoint) ? null : endpoint, props);
+            parentId, string.IsNullOrWhiteSpace(endpoint) ? null : endpoint, props)
+        {
+            Tags = ReadTags(row)
+        };
     }
 
     private static string Str(JsonElement row, string name) =>

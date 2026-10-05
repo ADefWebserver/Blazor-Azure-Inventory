@@ -4,7 +4,9 @@
     <Template Context="app">
         <RadzenDataGrid TItem="AppRow" Data="@app.Slots" AllowSorting="true" AllowColumnResize="true">
             <Columns>
-                <RadzenDataGridColumn Property="@nameof(AppRow.Name)" Title="Slot" />
+                <RadzenDataGridColumn Property="@nameof(AppRow.Name)" Title="Slot">
+                    <Template Context="slot"><ResourceLink Id="@slot.Resource.Id" Text="@slot.Name" /></Template>
+                </RadzenDataGridColumn>
                 <RadzenDataGridColumn Property="@nameof(AppRow.State)" Title="State" Width="110px" />
                 <RadzenDataGridColumn Property="@nameof(AppRow.DefaultHost)" Title="Default host" />
                 <RadzenDataGridColumn Title="Settings status" Width="150px" Sortable="false">
@@ -21,7 +23,9 @@
         </RadzenDataGrid>
     </Template>
     <Columns>
-        <RadzenDataGridColumn Property="@nameof(AppRow.Name)" Title="Name" Width="180px" />
+        <RadzenDataGridColumn Property="@nameof(AppRow.Name)" Title="Name" Width="180px">
+            <Template Context="app"><ResourceLink Id="@app.Resource.Id" Text="@app.Name" /></Template>
+        </RadzenDataGridColumn>
         <RadzenDataGridColumn Property="@nameof(AppRow.Kind)" Title="Kind" Width="110px">
             <Template Context="app">
                 <RadzenBadge Text="@app.Kind" Shade="Shade.Lighter" IsPill="true"
@@ -40,6 +44,9 @@
             <Template Context="app"><StatusBadge Status="@app.ConfigFilesStatus" IsConfigFiles="true" /></Template>
         </RadzenDataGridColumn>
         <RadzenDataGridColumn Property="@nameof(AppRow.Connections)" Title="Connections" Width="120px" />
+        <RadzenDataGridColumn Property="@nameof(AppRow.TagCount)" Title="Tags" Width="90px">
+            <Template Context="app"><TagCountLink Id="@app.Resource.Id" Text="@app.Name" Count="@app.TagCount" /></Template>
+        </RadzenDataGridColumn>
         <RadzenDataGridColumn Title="Actions" Width="190px" Sortable="false" Filterable="false">
             <Template Context="app">
                 <RadzenButton Text="View configuration" Icon="tune" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light"

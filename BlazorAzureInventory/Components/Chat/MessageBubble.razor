@@ -19,7 +19,7 @@
                     }
                     else
                     {
-                        @((MarkupString)MarkdownRenderer.ToSafeHtml(Message.Text))
+                        @((MarkupString)MarkdownRenderer.ToSafeHtml(Message.Text, IsKnownResource))
                     }
                 </RadzenCard>
                 break;
@@ -29,4 +29,7 @@
 
 @code {
     [Parameter, EditorRequired] public ChatMessageItem Message { get; set; } = default!;
+
+    /// <summary>Only <c>res:</c> links to IDs in the user's scan become clickable resource links.</summary>
+    [Parameter] public Func<string, bool>? IsKnownResource { get; set; }
 }

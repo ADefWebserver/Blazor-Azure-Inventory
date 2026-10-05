@@ -6,7 +6,9 @@ using BlazorAzureInventory.Services.Auth;
 using BlazorAzureInventory.Services.Azure;
 using BlazorAzureInventory.Services.Graph;
 using BlazorAzureInventory.Services.Mcp;
+using BlazorAzureInventory.Services.Resources;
 using BlazorAzureInventory.Services.Scan;
+using BlazorAzureInventory.Services.Tags;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.Extensions.Configuration.Json;
 using Microsoft.Extensions.FileProviders;
@@ -57,6 +59,7 @@ public class Program
         builder.Services.AddOptions<GraphSessionOptions>().BindConfiguration("GraphSession").ValidateDataAnnotations();
         builder.Services.AddOptions<SecurityOptions>().BindConfiguration("Security");
         builder.Services.AddOptions<AIOptions>().BindConfiguration("AI").ValidateDataAnnotations();
+        builder.Services.AddOptions<TaggingOptions>().BindConfiguration("Tagging").ValidateDataAnnotations();
 
         // Azure access (scoped == per Blazor circuit == per signed-in user)
         builder.Services.AddScoped<UserContextAccessor>();
@@ -80,6 +83,19 @@ public class Program
         builder.Services.AddSingleton<InventoryGraphBuilder>();
         builder.Services.AddSingleton<InventorySessionStore>();
         builder.Services.AddSingleton<GraphQueryService>();
+
+        // Tags (TagWriteService is the only code path that writes to Azure)
+        builder.Services.AddSingleton<TagValidator>();
+        builder.Services.AddSingleton<ConnectionTagGenerator>();
+        builder.Services.AddSingleton<TagProposalStore>();
+        builder.Services.AddScoped<ITagStore, ArmTagStore>();
+        builder.Services.AddScoped<TagSyncCoordinator>();
+        builder.Services.AddScoped<TagWriteService>();
+        builder.Services.AddScoped<ITagPermissionChecker, TagPermissionChecker>();
+        builder.Services.AddScoped<ResourceInspector>();
+        builder.Services.AddScoped<ResourceDialogLauncher>();
+        builder.Services.AddHttpClient(TagPermissionChecker.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
 
         // AI and MCP
         builder.Services.AddScoped<SessionAISettingsService>();

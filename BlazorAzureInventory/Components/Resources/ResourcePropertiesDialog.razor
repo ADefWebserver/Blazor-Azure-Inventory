@@ -1,0 +1,75 @@
+@* Resource Properties popup. Every value is tenant-controlled and rendered as encoded text only. *@
+@inject ResourceInspector Inspector
+
+@if (_loading)
+{
+    <RadzenStack AlignItems="AlignItems.Center" class="rz-p-6">
+        <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" />
+    </RadzenStack>
+}
+else if (_details is null)
+{
+    <RadzenAlert AlertStyle="AlertStyle.Warning" Shade="Shade.Lighter" AllowClose="false">This resource is not in your last scan.</RadzenAlert>
+}
+else
+{
+    <RadzenStack Gap="0.75rem">
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem" Wrap="FlexWrap.Wrap">
+            <span class="type-swatch" style="background: @NodeTypeStyles.ColorOf(_details.Type);"></span>
+            <RadzenText TextStyle="TextStyle.H5" class="rz-m-0" Style="word-break: break-all;">@_details.Label</RadzenText>
+            <RadzenBadge Text="@_details.Type" Shade="Shade.Lighter" BadgeStyle="BadgeStyle.Primary" IsPill="true" />
+            @if (_details.PortalUrl is { } url)
+            {
+                <RadzenLink Path="@url" Target="_blank" Text="Open in Azure portal" Icon="open_in_new" rel="noopener noreferrer" />
+            }
+        </RadzenStack>
+
+        <RadzenTabs @bind-SelectedIndex="_tab" RenderMode="TabRenderMode.Client">
+            <Tabs>
+                <RadzenTabsItem Text="Overview" Icon="info">
+                    <ResourceOverviewTab Details="@_details" />
+                </RadzenTabsItem>
+                <RadzenTabsItem Text="@($"Properties ({_details.Properties.Count})")" Icon="list">
+                    <ResourcePropertiesTab Properties="@_details.Properties" ShowFilter="true" ShowCopy="true" />
+                </RadzenTabsItem>
+                <RadzenTabsItem Text="@($"Connections ({_details.Connections.Count})")" Icon="hub">
+                    <ResourceConnectionsTab Connections="@_details.Connections" PageSize="10" />
+                </RadzenTabsItem>
+                <RadzenTabsItem Text="@($"Tags ({_details.Tags.Count})")" Icon="sell">
+                    <TagsTab Details="@_details" Preload="@Preload" OnChanged="@RefreshAsync" />
+                </RadzenTabsItem>
+            </Tabs>
+        </RadzenTabs>
+    </RadzenStack>
+}
+
+@code {
+    public const int TagsTabIndex = 3;
+
+    [Parameter] public string? ResourceId { get; set; }
+    [Parameter] public string? InitialTab { get; set; }
+    [Parameter] public ResourceTagDiff? Preload { get; set; }
+
+    private ResourceDetails? _details;
+    private bool _loading = true;
+    private int _tab;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _details = await Inspector.GetAsync(ResourceId);
+        _tab = InitialTab switch
+        {
+            "Properties" => 1,
+            "Connections" => 2,
+            ResourceDialogLauncher.TagsTab => TagsTabIndex,
+            _ => Preload is not null ? TagsTabIndex : 0
+        };
+        _loading = false;
+    }
+
+    /// <summary>Refreshes the header counts; the Tags tab keeps its own editing state.</summary>
+    private async Task RefreshAsync()
+    {
+        if (await Inspector.GetAsync(ResourceId) is { } fresh) _details = _details! with { Tags = fresh.Tags };
+    }
+}

@@ -84,6 +84,20 @@ public sealed class GraphIndex
     }
 }
 
+/// <summary>Keys and helpers for tag data stored on <see cref="GraphNode.Data"/>.</summary>
+public static class TagKeys
+{
+    public const string Tags = "tags";
+    public const string Taggable = "taggable";
+
+    public static IReadOnlyDictionary<string, string> GetTags(this GraphNode node) =>
+        node.Data.GetValueOrDefault(Tags) as IReadOnlyDictionary<string, string>
+        ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    public static bool IsTaggable(this GraphNode node) =>
+        node.Data.GetValueOrDefault(Taggable) is true && !node.Data.ContainsKey("isAggregate");
+}
+
 /// <summary>Client-side filter state sent to graph-view.js. Applied without re-sending graph data.</summary>
 public sealed class GraphFilterState
 {
@@ -94,6 +108,12 @@ public sealed class GraphFilterState
     public bool HideExternal { get; set; }
     public bool HideEmulator { get; set; } = true;
     public bool ShowLowConfidence { get; set; }
+
+    /// <summary>Only show nodes with this tag (overflow tags such as <c>name-2</c> also match).</summary>
+    public string? TagName { get; set; }
+
+    /// <summary>Optional case-insensitive substring the tag value must contain.</summary>
+    public string? TagValue { get; set; }
 }
 
 public sealed record GraphFacets(

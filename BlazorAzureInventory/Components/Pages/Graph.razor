@@ -1,11 +1,13 @@
 @page "/graph"
 @attribute [Authorize]
+@implements IDisposable
 @using BlazorAzureInventory.Components.Graph
 @using BlazorAzureInventory.Services.Scan
 @inject InventorySessionStore Store
 @inject UserContextAccessor UserContext
 @inject GraphQueryService GraphQueries
 @inject InventoryScanOrchestrator Orchestrator
+@inject ResourceDialogLauncher Launcher
 @inject NavigationManager Nav
 
 <PageTitle>Knowledge Graph - Azure Inventory</PageTitle>
@@ -42,11 +44,12 @@
             </RadzenSplitterPane>
             <RadzenSplitterPane>
                 <div class="graph-pane" style="overflow: hidden;">
-                    <GraphCanvas @ref="_canvas" Graph="@_graph" Filter="@_filter" OnNodeSelected="@OnNodeSelected" OnRendered="@OnRenderedAsync" OnRebuild="@RebuildAsync" />
+                    <GraphCanvas @ref="_canvas" Graph="@_graph" Filter="@_filter" OnNodeSelected="@OnNodeSelected" OnRendered="@OnRenderedAsync"
+                                 OnRebuild="@RebuildAsync" OnNodeOpen="@OpenDetailsAsync" OnEdgeSelected="@OnEdgeSelected" />
                 </div>
             </RadzenSplitterPane>
             <RadzenSplitterPane Size="340px" Min="240px" Collapsible="true">
-                <NodePropertiesPanel Node="@_selected" Index="@_index" />
+                <NodePropertiesPanel Node="@_selected" Edge="@_selectedEdge" Index="@_index" OnOpenDetails="@OpenDetailsAsync" />
             </RadzenSplitterPane>
         </RadzenSplitter>
     }
@@ -59,8 +62,10 @@
     private GraphIndex? _index;
     private GraphFacets? _facets;
     private GraphNode? _selected;
+    private GraphEdge? _selectedEdge;
     private GraphCanvas? _canvas;
     private string? _pendingFocus;
+    private string? _sessionKey;
     private readonly GraphFilterState _filter = new()
     {
         NodeTypes = NodeTypeStyles.All.Select(t => t.Type).Where(t => !NodeTypeStyles.HiddenByDefault.Contains(t)).ToList()
@@ -68,9 +73,12 @@
 
     protected override async Task OnInitializedAsync()
     {
-        var session = Store.Get(await UserContext.GetUserAsync());
+        var user = await UserContext.GetUserAsync();
+        _sessionKey = InventorySessionStore.KeyFor(user);
+        var session = Store.Get(user);
         Load(session?.Graph, session?.Index);
         _pendingFocus = Focus;
+        Store.TagsChanged += OnTagsChanged;
     }
 
     private void Load(GraphDocument? graph, GraphIndex? index)
@@ -79,6 +87,7 @@
         _index = index;
         _facets = index is null ? null : GraphQueries.GetFacets(index);
         _selected = null;
+        _selectedEdge = null;
     }
 
     private async Task ApplyFilterAsync()
@@ -91,8 +100,37 @@
         if (_canvas is not null && await _canvas.FocusAsync(id)) OnNodeSelected(id);
     }
 
-    private void OnNodeSelected(string? id) =>
+    private void OnNodeSelected(string? id)
+    {
         _selected = id is not null && _index?.NodesById.TryGetValue(id, out var node) == true ? node : null;
+        if (_selected is not null) _selectedEdge = null;
+    }
+
+    private void OnEdgeSelected(string? id)
+    {
+        _selectedEdge = id is null ? null : _graph?.Edges.FirstOrDefault(e => e.Id == id);
+        if (_selectedEdge is not null) _selected = null;
+    }
+
+    private Task OpenDetailsAsync(string id) =>
+        _index?.NodesById.TryGetValue(id, out var node) == true && node.Type != nameof(AzureResourceKind.Tenant)
+            ? Launcher.OpenAsync(node.Id, node.Label)
+            : Task.CompletedTask;
+
+    private void OnTagsChanged(string sessionKey, string resourceId)
+    {
+        if (sessionKey != _sessionKey) return;
+        _ = InvokeAsync(async () =>
+        {
+            if (_canvas is not null && _index?.NodesById.TryGetValue(resourceId, out var node) == true)
+            {
+                await _canvas.UpdateNodeTagsAsync(node.Id, node.GetTags());
+            }
+            StateHasChanged();
+        });
+    }
+
+    public void Dispose() => Store.TagsChanged -= OnTagsChanged;
 
     private async Task OnRenderedAsync()
     {

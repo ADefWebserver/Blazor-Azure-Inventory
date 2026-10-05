@@ -1,0 +1,8 @@
+@* Tag count that opens the Resource Properties popup on the Tags tab. *@
+<ResourceLink Id="@Id" Text="@Count.ToString()" ResourceName="@Text" InitialTab="@ResourceDialogLauncher.TagsTab" CssClass="tag-count" />
+
+@code {
+    [Parameter, EditorRequired] public string Id { get; set; } = "";
+    [Parameter] public string Text { get; set; } = "";
+    [Parameter] public int Count { get; set; }
+}

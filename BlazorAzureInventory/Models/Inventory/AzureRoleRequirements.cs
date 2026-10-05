@@ -36,7 +36,13 @@ public static class AzureRoleRequirements
     public static readonly RoleRequirement ContainerApps = new(ScanProgress.Stages[5],
         "Read Container Apps environment variables", Reader, "Microsoft.App/containerApps/read");
 
-    public static IReadOnlyList<RoleRequirement> All { get; } = [ResourceGraph, BlobContainers, AppSettings, ConfigFiles, ContainerApps];
+    public const string TagContributor = "Tag Contributor";
+
+    /// <summary>Optional: only needed to edit tags. Not a scan stage, so it never appears in <see cref="Detect"/>.</summary>
+    public static readonly RoleRequirement EditTags = new("Editing tags",
+        "Edit tags (optional)", TagContributor, "Microsoft.Resources/tags/write");
+
+    public static IReadOnlyList<RoleRequirement> All { get; } = [ResourceGraph, BlobContainers, AppSettings, ConfigFiles, ContainerApps, EditTags];
 
     public static RoleRequirement? ForStage(string stage) =>
         All.FirstOrDefault(r => string.Equals(r.Stage, stage, StringComparison.Ordinal));

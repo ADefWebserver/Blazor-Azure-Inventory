@@ -6,6 +6,7 @@
         <code>*/read</code>, so full results need <strong>@AzureRoleRequirements.Reader</strong> and
         <strong>@AzureRoleRequirements.WebsiteContributor</strong> together (or @AzureRoleRequirements.Alternatives).
         With Reader only, the inventory works but app settings and config files show <code>AccessDenied</code>.
+        <strong>@AzureRoleRequirements.TagContributor</strong> is optional and only needed to edit tags (Contributor or Owner also work).
     </RadzenText>
     <table class="roles-table">
         <thead>
@@ -27,5 +28,7 @@
 @code {
     private static readonly string Commands = string.Join(Environment.NewLine,
         $"az role assignment create --assignee \"<user@domain>\" --role \"{AzureRoleRequirements.Reader}\" --scope \"/subscriptions/<subscription-id>\"",
-        $"az role assignment create --assignee \"<user@domain>\" --role \"{AzureRoleRequirements.WebsiteContributor}\" --scope \"/subscriptions/<subscription-id>\"");
+        $"az role assignment create --assignee \"<user@domain>\" --role \"{AzureRoleRequirements.WebsiteContributor}\" --scope \"/subscriptions/<subscription-id>\"",
+        $"# Optional, to edit tags:",
+        $"az role assignment create --assignee \"<user@domain>\" --role \"{AzureRoleRequirements.TagContributor}\" --scope \"/subscriptions/<subscription-id>\"");
 }

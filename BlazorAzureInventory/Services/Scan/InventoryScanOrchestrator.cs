@@ -44,6 +44,7 @@ public sealed class InventoryScanOrchestrator(
         stage = ScanProgress.Stages[1];
         var resources = new List<AzureResourceInfo>();
         var groups = new List<ResourceGroupInfo>();
+        var subscriptionTags = new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
         var done = 0;
         foreach (var tenantGroup in byTenant)
         {
@@ -51,9 +52,11 @@ public sealed class InventoryScanOrchestrator(
             progress.Report(new ScanProgress(stage, done, byTenant.Count, tenantName));
             try
             {
-                var (found, rgs) = await resourceGraph.QueryAsync(tenantGroup.Key, tenantGroup.Select(s => s.SubscriptionId).ToList(), ct);
+                var (found, rgs, subTags) = await resourceGraph.QueryWithSubscriptionTagsAsync(
+                    tenantGroup.Key, tenantGroup.Select(s => s.SubscriptionId).ToList(), ct);
                 resources.AddRange(found);
                 groups.AddRange(rgs);
+                foreach (var (id, tags) in subTags) subscriptionTags[id] = tags;
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)
             {
@@ -141,7 +144,9 @@ public sealed class InventoryScanOrchestrator(
         var snapshot = new InventorySnapshot(
             DateTimeOffset.UtcNow,
             request.Tenants.Where(t => tenantIds.Contains(t.TenantId)).ToList(),
-            request.Subscriptions,
+            request.Subscriptions
+                .Select(s => subscriptionTags.TryGetValue(s.SubscriptionId, out var tags) ? s with { Tags = tags } : s)
+                .ToList(),
             groups.DistinctBy(g => g.Id).ToList(),
             resources.OrderBy(r => r.Id, StringComparer.Ordinal).ToList(),
             matched,

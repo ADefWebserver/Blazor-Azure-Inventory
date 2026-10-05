@@ -26,6 +26,8 @@
     [Parameter] public GraphDocument? Graph { get; set; }
     [Parameter] public GraphFilterState Filter { get; set; } = new();
     [Parameter] public EventCallback<string?> OnNodeSelected { get; set; }
+    [Parameter] public EventCallback<string> OnNodeOpen { get; set; }
+    [Parameter] public EventCallback<string?> OnEdgeSelected { get; set; }
     [Parameter] public EventCallback OnRendered { get; set; }
     [Parameter] public EventCallback OnRebuild { get; set; }
 
@@ -100,6 +102,17 @@
 
     [JSInvokable("OnNodeSelected")]
     public Task NodeSelected(string? id) => OnNodeSelected.InvokeAsync(id);
+
+    [JSInvokable("OnNodeOpen")]
+    public Task NodeOpen(string id) => OnNodeOpen.InvokeAsync(id);
+
+    [JSInvokable("OnEdgeSelected")]
+    public Task EdgeSelected(string? id) => OnEdgeSelected.InvokeAsync(id);
+
+    public async Task UpdateNodeTagsAsync(string id, IReadOnlyDictionary<string, string> tags)
+    {
+        if (_module is not null) await _module.InvokeVoidAsync("updateNodeTags", id, tags);
+    }
 
     public async ValueTask DisposeAsync()
     {

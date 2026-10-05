@@ -1,0 +1,33 @@
+@* Edges of a node. Other nodes open their own popup. Labels and setting keys are rendered as encoded text only. *@
+<RadzenDataGrid TItem="ConnectionRow" Data="@Connections" AllowSorting="true" AllowPaging="true" PageSize="@PageSize" Density="Density.Compact"
+                EmptyText="No connections.">
+    <Columns>
+        <RadzenDataGridColumn Property="@nameof(ConnectionRow.Direction)" Title="Dir" Width="60px">
+            <Template Context="c">
+                <RadzenIcon Icon="@(c.Direction == "In" ? "arrow_back" : "arrow_forward")" title="@c.Direction" />
+            </Template>
+        </RadzenDataGridColumn>
+        <RadzenDataGridColumn Property="@nameof(ConnectionRow.EdgeType)" Title="Edge" />
+        <RadzenDataGridColumn Property="@nameof(ConnectionRow.Other)" Title="Node">
+            <Template Context="c">
+                @if (c.OtherIsResource && LinkOthers)
+                {
+                    <ResourceLink Id="@c.OtherId" Text="@c.Other" />
+                }
+                else
+                {
+                    @c.Other
+                }
+            </Template>
+        </RadzenDataGridColumn>
+        <RadzenDataGridColumn Property="@nameof(ConnectionRow.SettingKeys)" Title="Setting keys">
+            <Template Context="c"><span class="mono">@c.SettingKeys</span></Template>
+        </RadzenDataGridColumn>
+    </Columns>
+</RadzenDataGrid>
+
+@code {
+    [Parameter] public IReadOnlyList<ConnectionRow> Connections { get; set; } = [];
+    [Parameter] public int PageSize { get; set; } = 8;
+    [Parameter] public bool LinkOthers { get; set; } = true;
+}

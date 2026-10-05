@@ -16,6 +16,7 @@ public class ComponentTests : BunitContext
     {
         JSInterop.Mode = JSRuntimeMode.Loose;
         Services.AddRadzenComponents();
+        Services.AddScoped<BlazorAzureInventory.Services.Resources.ResourceDialogLauncher>();
         Services.AddSingleton<AntiforgeryStateProvider, FakeAntiforgeryStateProvider>();
     }
 

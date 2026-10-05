@@ -36,7 +36,8 @@ public sealed class InventoryGraphTools(InventorySnapshot snapshot, GraphIndex i
     {
         var node = Resolve(id).FirstOrDefault();
         if (node is null) return null;
-        var props = node.Data.Where(kv => kv.Key != "references")
+        // Tags are excluded here; GetTags returns them with secret-like values masked.
+        var props = node.Data.Where(kv => kv.Key != "references" && kv.Key != TagKeys.Tags)
             .ToDictionary(kv => kv.Key, kv => kv.Value?.ToString());
         return new NodeDetail(node.Id, node.Type, node.Label, props, index.In(node.Id).Count, index.Out(node.Id).Count);
     }
@@ -203,27 +204,7 @@ public sealed class InventoryGraphTools(InventorySnapshot snapshot, GraphIndex i
     private int Cap(int max) => Math.Clamp(max <= 0 ? 20 : max, 1, hardCap);
 
     /// <summary>Resolves by ID, "parent/child" label, exact label, then partial label.</summary>
-    private IEnumerable<GraphNode> Resolve(string idOrName)
-    {
-        if (string.IsNullOrWhiteSpace(idOrName)) return [];
-        var q = idOrName.Trim();
-        if (index.NodesById.TryGetValue(q, out var byId)) return [byId];
-
-        var parts = q.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length >= 2 && !q.StartsWith('/'))
-        {
-            var parentLabel = parts[0];
-            var childLabel = parts[^1];
-            var children = index.Graph.Nodes.Where(n => n.Label.Equals(childLabel, StringComparison.OrdinalIgnoreCase)
-                && index.In(n.Id).Any(e => ChildEdges.Contains(e.Type)
-                    && index.NodesById.TryGetValue(e.Source, out var p) && p.Label.Equals(parentLabel, StringComparison.OrdinalIgnoreCase)))
-                .ToList();
-            if (children.Count > 0) return children;
-        }
-
-        var exact = index.Graph.Nodes.Where(n => n.Label.Equals(q, StringComparison.OrdinalIgnoreCase)).ToList();
-        return exact.Count > 0 ? exact : index.Graph.Nodes.Where(n => n.Label.Contains(q, StringComparison.OrdinalIgnoreCase)).Take(10).ToList();
-    }
+    private IEnumerable<GraphNode> Resolve(string idOrName) => GraphNodeResolver.Resolve(index, idOrName);
 
     private IEnumerable<string> WithParents(string nodeId)
     {

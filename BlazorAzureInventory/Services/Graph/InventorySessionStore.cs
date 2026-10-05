@@ -3,6 +3,7 @@ using BlazorAzureInventory.Models.AI;
 using BlazorAzureInventory.Models.Graph;
 using BlazorAzureInventory.Models.Inventory;
 using BlazorAzureInventory.Models.Options;
+using BlazorAzureInventory.Models.Tags;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using Microsoft.Identity.Web;
@@ -15,6 +16,12 @@ public sealed class InventorySession
     public GraphDocument? Graph { get; set; }
     public GraphIndex? Index { get; set; }
     public ProtectedAISettings? AISettings { get; set; }
+
+    /// <summary>Guards tag mutations; one session can be shared by several circuits (browser tabs) of the same user.</summary>
+    public object SyncRoot { get; } = new();
+
+    /// <summary>Pending and completed tag proposals, keyed by proposal ID.</summary>
+    public Dictionary<string, TagProposal> TagProposals { get; } = new(StringComparer.Ordinal);
 }
 
 /// <summary>
@@ -34,6 +41,14 @@ public sealed class InventorySessionStore : IDisposable
 
     /// <summary>Raised with the session key whenever a session is set or cleared.</summary>
     public event Action<string>? SessionChanged;
+
+    /// <summary>Raised with the session key and resource ID after tags of a resource were written.</summary>
+    public event Action<string, string>? TagsChanged;
+
+    public void NotifyTagsChanged(ClaimsPrincipal user, string resourceId)
+    {
+        if (KeyFor(user) is { } key) TagsChanged?.Invoke(key, resourceId);
+    }
 
     public static string? KeyFor(ClaimsPrincipal user)
     {

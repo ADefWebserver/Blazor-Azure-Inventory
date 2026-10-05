@@ -19,6 +19,18 @@
     </RadzenStack>
 
     <RadzenStack Gap="0.5rem">
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
+            <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">Tag</RadzenText>
+            <RadzenButton Text="Clear" Variant="Variant.Text" Size="ButtonSize.ExtraSmall" Click="@ClearTagAsync" />
+        </RadzenStack>
+        <RadzenAutoComplete Data="@_tagNames" Placeholder="Tag name, e.g. conn-out-SqlDatabase" Style="width: 100%;"
+                            Value="@Filter.TagName" ValueChanged="@(async (string v) => { Filter.TagName = v; await Changed(); })"
+                            FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" aria-label="Tag name" />
+        <RadzenTextBox Placeholder="Value contains (optional)" Style="width: 100%;" Value="@Filter.TagValue"
+                       ValueChanged="@(async (string v) => { Filter.TagValue = v; await Changed(); })" aria-label="Tag value contains" />
+    </RadzenStack>
+
+    <RadzenStack Gap="0.5rem">
         <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">Display</RadzenText>
         @foreach (var (label, getter, setter) in DisplayToggles())
         {
@@ -56,10 +68,23 @@
     [Parameter] public EventCallback<string> OnFindNode { get; set; }
 
     private List<NodeOption> _nodeOptions = new();
+    private List<string> _tagNames = new();
 
     protected override void OnParametersSet()
     {
         _nodeOptions = Nodes.Select(n => new NodeOption(n.Id, $"{n.Label} ({n.Type})")).OrderBy(o => o.Display).ToList();
+        _tagNames = Nodes.SelectMany(n => n.GetTags().Keys)
+            .Select(k => System.Text.RegularExpressions.Regex.Replace(k, @"-\d+$", ""))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private async Task ClearTagAsync()
+    {
+        Filter.TagName = null;
+        Filter.TagValue = null;
+        await Changed();
     }
 
     private IEnumerable<(string Label, Func<bool> Get, Action<bool> Set)> DisplayToggles()

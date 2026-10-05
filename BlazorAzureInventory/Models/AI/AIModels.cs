@@ -103,5 +103,8 @@ public sealed class ChatMessageItem
     public string Text { get; set; } = "";
     public DateTimeOffset Timestamp { get; init; } = DateTimeOffset.UtcNow;
     public ToolCallInfo? ToolCall { get; init; }
+
+    /// <summary>Set on items that render a tag proposal card.</summary>
+    public string? ProposalId { get; init; }
     public bool IsStreaming { get; set; }
 }

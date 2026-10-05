@@ -1,10 +1,47 @@
-@* Selected node details. Labels and keys are tenant-controlled and rendered as encoded text only. *@
+@* Selected node or edge details. Labels and keys are tenant-controlled and rendered as encoded text only. *@
 <div class="graph-pane">
-    @if (Node is null || Index is null)
+    @if (Edge is not null && Index is not null)
+    {
+        <RadzenCard>
+            <RadzenStack Gap="0.75rem">
+                <RadzenStack Gap="0.25rem">
+                    <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">Edge</RadzenText>
+                    <RadzenBadge Text="@Edge.Type" Shade="Shade.Lighter" BadgeStyle="BadgeStyle.Info" IsPill="true" Style="align-self: flex-start;" />
+                </RadzenStack>
+                @foreach (var (label, id) in new[] { ("Source", Edge.Source), ("Target", Edge.Target) })
+                {
+                    var node = Index.NodesById.GetValueOrDefault(id);
+                    <RadzenStack Gap="0.1rem">
+                        <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">@label</RadzenText>
+                        @if (node is not null && node.Type != nameof(AzureResourceKind.Tenant))
+                        {
+                            <span><span class="type-swatch" style="background: @NodeTypeStyles.ColorOf(node.Type);"></span><ResourceLink Id="@node.Id" Text="@node.Label" /></span>
+                        }
+                        else
+                        {
+                            <span>@(node?.Label ?? id)</span>
+                        }
+                    </RadzenStack>
+                }
+                @if (EdgeKeys is { Length: > 0 } keys)
+                {
+                    <RadzenStack Gap="0.1rem">
+                        <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">Setting keys</RadzenText>
+                        <span class="mono">@keys</span>
+                    </RadzenStack>
+                }
+                @if (Edge.Data.GetValueOrDefault("confidence") is { } confidence)
+                {
+                    <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">Confidence: @confidence</RadzenText>
+                }
+            </RadzenStack>
+        </RadzenCard>
+    }
+    else if (Node is null || Index is null)
     {
         <RadzenStack AlignItems="AlignItems.Center" class="rz-p-8">
             <RadzenIcon Icon="touch_app" class="muted" />
-            <RadzenText TextStyle="TextStyle.Body2" class="muted">Select a node to see its details.</RadzenText>
+            <RadzenText TextStyle="TextStyle.Body2" class="muted">Select a node or edge to see its details. Double-click a node to open all its properties and tags.</RadzenText>
         </RadzenStack>
     }
     else
@@ -16,7 +53,16 @@
                     <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
                         <span class="type-swatch" style="background: @NodeTypeStyles.ColorOf(Node.Type);"></span>
                         <RadzenBadge Text="@Node.Type" Shade="Shade.Lighter" BadgeStyle="BadgeStyle.Primary" IsPill="true" />
+                        @if (Node.IsTaggable())
+                        {
+                            <RadzenBadge Text="@($"{Node.GetTags().Count} tags")" Shade="Shade.Lighter" BadgeStyle="BadgeStyle.Secondary" IsPill="true" />
+                        }
                     </RadzenStack>
+                    @if (Node.Type != nameof(AzureResourceKind.Tenant))
+                    {
+                        <RadzenButton Text="Open details" Icon="open_in_full" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light"
+                                      Style="align-self: flex-start;" Click="@(() => OnOpenDetails.InvokeAsync(Node.Id))" />
+                    }
                     @if (PortalUrl is { } url)
                     {
                         <RadzenLink Path="@url" Target="_blank" Text="Open in Azure portal" Icon="open_in_new" rel="noopener noreferrer" />
@@ -25,32 +71,12 @@
 
                 <RadzenStack Gap="0.25rem">
                     <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">Properties</RadzenText>
-                    <RadzenDataList TItem="KeyValuePair<string, string>" Data="@Properties" WrapItems="false" AllowPaging="false">
-                        <Template Context="p">
-                            <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" Gap="0.5rem">
-                                <RadzenText TextStyle="TextStyle.Body2" class="muted rz-m-0">@p.Key</RadzenText>
-                                <RadzenText TextStyle="TextStyle.Body2" class="mono rz-m-0" Style="word-break: break-all; text-align: right;">@p.Value</RadzenText>
-                            </RadzenStack>
-                        </Template>
-                    </RadzenDataList>
+                    <ResourcePropertiesTab Properties="@Properties" />
                 </RadzenStack>
 
                 <RadzenStack Gap="0.25rem">
                     <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">Connections (@Connections.Count)</RadzenText>
-                    <RadzenDataGrid TItem="ConnectionRow" Data="@Connections" AllowSorting="true" AllowPaging="true" PageSize="8" Density="Density.Compact">
-                        <Columns>
-                            <RadzenDataGridColumn Property="@nameof(ConnectionRow.Direction)" Title="Dir" Width="60px">
-                                <Template Context="c">
-                                    <RadzenIcon Icon="@(c.Direction == "In" ? "arrow_back" : "arrow_forward")" title="@c.Direction" />
-                                </Template>
-                            </RadzenDataGridColumn>
-                            <RadzenDataGridColumn Property="@nameof(ConnectionRow.EdgeType)" Title="Edge" />
-                            <RadzenDataGridColumn Property="@nameof(ConnectionRow.Other)" Title="Node" />
-                            <RadzenDataGridColumn Property="@nameof(ConnectionRow.SettingKeys)" Title="Setting keys">
-                                <Template Context="c"><span class="mono">@c.SettingKeys</span></Template>
-                            </RadzenDataGridColumn>
-                        </Columns>
-                    </RadzenDataGrid>
+                    <ResourceConnectionsTab Connections="@Connections" LinkOthers="@LinkConnections" />
                 </RadzenStack>
             </RadzenStack>
         </RadzenCard>
@@ -59,15 +85,19 @@
 
 @code {
     [Parameter] public GraphNode? Node { get; set; }
+    [Parameter] public GraphEdge? Edge { get; set; }
     [Parameter] public GraphIndex? Index { get; set; }
+    [Parameter] public EventCallback<string> OnOpenDetails { get; set; }
+    [Parameter] public bool LinkConnections { get; set; } = true;
 
     private List<KeyValuePair<string, string>> Properties { get; set; } = new();
     private List<ConnectionRow> Connections { get; set; } = new();
 
-    private string? PortalUrl =>
-        Node is not null && Node.Id.StartsWith("/subscriptions/", StringComparison.Ordinal)
-            ? $"https://portal.azure.com/#@{Node.Data.GetValueOrDefault("tenantId")}/resource{Node.Id}"
-            : null;
+    private string? PortalUrl => Node is null ? null : ResourceInspector.PortalUrl(Node);
+
+    private string? EdgeKeys => Edge?.Data.GetValueOrDefault("references") is List<EdgeReference> refs
+        ? string.Join(", ", refs.Select(r => r.SettingKey).Distinct())
+        : Edge?.Data.GetValueOrDefault("repositories") is List<string> repos ? string.Join(", ", repos) : null;
 
     protected override void OnParametersSet()
     {
@@ -78,26 +108,7 @@
             return;
         }
 
-        Properties = Node.Data
-            .Where(kv => kv.Value is string or bool or int or long or double)
-            .Where(kv => kv.Value is not string s || s.Length > 0)
-            .Select(kv => new KeyValuePair<string, string>(kv.Key, kv.Value!.ToString()!))
-            .OrderBy(kv => kv.Key)
-            .ToList();
-
-        Connections = Index.Out(Node.Id).Select(e => Row("Out", e, e.Target))
-            .Concat(Index.In(Node.Id).Select(e => Row("In", e, e.Source)))
-            .ToList();
+        Properties = ResourceInspector.BuildProperties(Node);
+        Connections = ResourceInspector.BuildConnections(Index, Node);
     }
-
-    private ConnectionRow Row(string direction, GraphEdge edge, string otherId)
-    {
-        var other = Index!.NodesById.TryGetValue(otherId, out var n) ? n.Label : otherId;
-        var keys = edge.Data.GetValueOrDefault("references") is List<EdgeReference> refs
-            ? string.Join(", ", refs.Select(r => r.SettingKey).Distinct())
-            : edge.Data.GetValueOrDefault("repositories") is List<string> repos ? string.Join(", ", repos) : "";
-        return new ConnectionRow(direction, edge.Type, other, keys);
-    }
-
-    private sealed record ConnectionRow(string Direction, string EdgeType, string Other, string SettingKeys);
 }

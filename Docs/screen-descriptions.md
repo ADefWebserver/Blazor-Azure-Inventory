@@ -31,6 +31,8 @@ This document describes every screen in **BlazorAzureInventory** so that UI mock
 | 8 | AI Chat | `/chat` | yes |
 | 9 | Settings (AI provider settings) | `/settings` | yes |
 | 10 | Not Found and Error | `/not-found`, `/Error` | no |
+| 11 | Resource Properties popup (Tags tab) | dialog over Inventory, Graph, App Configuration, and Chat | yes |
+| 12 | Tag connections dialog | dialog over Inventory | yes |
 
 ---
 
@@ -403,6 +405,22 @@ A `RadzenCard` for the selected node:
 - **Not Found:** centered `RadzenCard` with a `search_off` icon, "Page not found", and a **Go Home** button.
 - **Error:** centered `RadzenCard` with an `error` icon, "Something went wrong", a request ID caption, and a **Go Home** button. Never show stack traces or setting values.
 - **Reconnect modal** (Blazor Server connection loss): a small modal "Connection lost. Reconnecting..." with a spinner and a **Retry** button.
+
+---
+
+## 11. Resource Properties Popup
+
+Opened by clicking any resource name: Inventory grid rows (including slots, databases, and containers), the **Tags** count column, a Graph node (double-click or **Open details**), the Source or Target of a selected Graph edge, the App Configuration title, and resource links in assistant chat messages.
+
+- **Header:** a type swatch, the resource name, a type badge, and an **Open in Azure portal** link.
+- **Tabs:** **Overview** (name, type, subscription, resource group, location, endpoint, resource ID, scan time), **Properties (n)** (filterable list with copy buttons), **Connections (n)** (direction, edge, node link, setting keys), and **Tags (n)**.
+- **Tags tab:** a table of Name, Value, Status (`Added`, `Changed`, `Removed`), and Actions (edit, delete, undo). Above it: **Add tag**, **Generate connection tags**, and a filter box. **Review changes (n)** shows the diff, and then **Save** writes it. Generated `conn-*` tags show a "Generated" badge. Values that look like secrets show a warning icon.
+- **States to mock:** editable; read-only for Reader users ("You need Tag Contributor..."); not taggable (blob container); conflict alert with **Reload** and **Keep mine**; saved toast; stale-scan warning.
+
+## 12. Tag Connections Dialog and Proposal Card
+
+- **Tag connections...** on the Inventory toolbar opens a dialog with Subscription, Resource group, and Resource types filters, a count of resources in scope, and **Preview changes**.
+- The preview (and an AI chat proposal) is a **proposal card**: a title, status badge, counts, reason, a collapsible warnings panel, and a table of resources with checkboxes, change counts (`+2 ~1 -0`), an expandable per-tag diff, and a **Review** button that opens the popup on the Tags tab. The footer has **Discard** and **Apply N changes**. While applying, a progress bar is shown, then a result icon for each row (saved, conflict, forbidden or policy, error).
 
 ---
 

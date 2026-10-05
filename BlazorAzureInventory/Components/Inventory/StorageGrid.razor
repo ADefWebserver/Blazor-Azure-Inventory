@@ -8,7 +8,9 @@
         }
         <RadzenDataGrid TItem="ChildRow" Data="@account.ContainerRows" AllowSorting="true" AllowPaging="true" PageSize="10" AllowColumnResize="true">
             <Columns>
-                <RadzenDataGridColumn Property="@nameof(ChildRow.Name)" Title="Container" />
+                <RadzenDataGridColumn Property="@nameof(ChildRow.Name)" Title="Container">
+                    <Template Context="c"><ResourceLink Id="@c.Resource.Id" Text="@c.Name" /></Template>
+                </RadzenDataGridColumn>
                 <RadzenDataGridColumn Property="@nameof(ChildRow.PublicAccess)" Title="Public access" Width="140px" />
                 <RadzenDataGridColumn Property="@nameof(ChildRow.LastModified)" Title="Last modified (UTC)" Width="180px" />
                 <RadzenDataGridColumn Property="@nameof(ChildRow.Consumers)" Title="Consumers" Width="120px">
@@ -20,7 +22,9 @@
         </RadzenDataGrid>
     </Template>
     <Columns>
-        <RadzenDataGridColumn Property="@nameof(StorageRow.Account)" Title="Account" />
+        <RadzenDataGridColumn Property="@nameof(StorageRow.Account)" Title="Account">
+            <Template Context="a"><ResourceLink Id="@a.Resource.Id" Text="@a.Account" /></Template>
+        </RadzenDataGridColumn>
         <RadzenDataGridColumn Property="@nameof(StorageRow.Kind)" Title="Kind" Width="130px" />
         <RadzenDataGridColumn Property="@nameof(StorageRow.Sku)" Title="SKU" Width="150px" />
         <RadzenDataGridColumn Property="@nameof(StorageRow.HnsEnabled)" Title="HNS enabled" Width="130px" />
@@ -30,6 +34,9 @@
             <Template Context="a">
                 <RadzenLink Text="@a.Consumers.ToString()" Path="@($"graph?focus={Uri.EscapeDataString(a.Resource.Id)}")" title="Show in graph" />
             </Template>
+        </RadzenDataGridColumn>
+        <RadzenDataGridColumn Property="@nameof(StorageRow.TagCount)" Title="Tags" Width="90px">
+            <Template Context="a"><TagCountLink Id="@a.Resource.Id" Text="@a.Account" Count="@a.TagCount" /></Template>
         </RadzenDataGridColumn>
     </Columns>
 </RadzenDataGrid>

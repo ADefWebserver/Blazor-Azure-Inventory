@@ -1,0 +1,489 @@
+@* Tag viewer and editor. Tag names and values are tenant-controlled and rendered as encoded text only. *@
+@implements IDisposable
+@using Microsoft.Extensions.Options
+@using BlazorAzureInventory.Models.Options
+@inject TagValidator Validator
+@inject TagWriteService Writer
+@inject TagSyncCoordinator Sync
+@inject ConnectionTagGenerator Generator
+@inject ResourceInspector Inspector
+@inject InventorySessionStore Store
+@inject UserContextAccessor UserContext
+@inject NotificationService Notifications
+@inject IOptions<TaggingOptions> TaggingOptions
+
+<RadzenStack Gap="0.75rem" class="tags-tab">
+    @if (IsStale)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Warning" Shade="Shade.Lighter" AllowClose="false" Size="AlertSize.Small">
+            Based on the scan at @Details.ScannedUtc.ToString("yyyy-MM-dd HH:mm 'UTC'"). Consider rescanning before generating connection tags.
+        </RadzenAlert>
+    }
+    @if (!Details.IsTaggable)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Info" Shade="Shade.Lighter" AllowClose="false" Size="AlertSize.Small">
+            @(Details.NotTaggableReason ?? "This item cannot be tagged.")
+        </RadzenAlert>
+    }
+    else if (!Writer.IsEnabled)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Info" Shade="Shade.Lighter" AllowClose="false" Size="AlertSize.Small">Tag editing is disabled by the administrator.</RadzenAlert>
+    }
+    else if (_canEdit == false)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Info" Shade="Shade.Lighter" AllowClose="false" Size="AlertSize.Small">
+            Tags are read-only. You need <strong>Tag Contributor</strong> (or Contributor/Owner) on this resource to edit them.
+            See <a href="/">Required Azure roles</a>.
+        </RadzenAlert>
+    }
+
+    @if (_externalChange)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Warning" Shade="Shade.Lighter" AllowClose="false" Size="AlertSize.Small">
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="1rem">
+                <span>Tags were changed elsewhere. Reload?</span>
+                <RadzenButton Text="Reload" Size="ButtonSize.ExtraSmall" Click="@ReloadFromSessionAsync" />
+            </RadzenStack>
+        </RadzenAlert>
+    }
+
+    @if (_conflict is not null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" Shade="Shade.Lighter" AllowClose="false" Title="Tags changed in Azure since you loaded them">
+            <table class="roles-table">
+                <thead><tr><th>Tag</th><th>Value now</th><th>Your value</th></tr></thead>
+                <tbody>
+                    @foreach (var c in _conflict.Conflicts)
+                    {
+                        <tr><td class="mono">@c.Name</td><td class="mono">@(c.CurrentValue ?? "(removed)")</td><td class="mono">@(c.YourValue ?? "(removed)")</td></tr>
+                    }
+                </tbody>
+            </table>
+            <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" class="rz-mt-2">
+                <RadzenButton Text="Reload" Icon="refresh" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@ReloadFromConflictAsync" />
+                <RadzenButton Text="Keep mine" Icon="merge" Size="ButtonSize.Small" Click="@KeepMineAsync" />
+            </RadzenStack>
+        </RadzenAlert>
+    }
+
+    @if (_error is not null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" Shade="Shade.Lighter" AllowClose="true" Close="@(() => _error = null)" Size="AlertSize.Small">@_error</RadzenAlert>
+    }
+
+    @if (_generatorWarnings.Count > 0)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Warning" Shade="Shade.Lighter" AllowClose="true" Close="@(() => _generatorWarnings.Clear())" Size="AlertSize.Small">
+            @foreach (var w in _generatorWarnings)
+            {
+                <div>@w</div>
+            }
+        </RadzenAlert>
+    }
+
+    @if (_reviewing)
+    {
+        <RadzenCard class="rz-p-3">
+            <RadzenText TextStyle="TextStyle.Subtitle2" class="rz-mt-0">Review changes (@Changes.Count)</RadzenText>
+            <table class="roles-table">
+                <thead><tr><th>Change</th><th>Tag</th><th>Old value</th><th>New value</th></tr></thead>
+                <tbody>
+                    @foreach (var c in Changes)
+                    {
+                        <tr>
+                            <td><RadzenBadge Text="@c.Kind.ToString()" Shade="Shade.Lighter" IsPill="true" BadgeStyle="@KindStyle(c.Kind)" /></td>
+                            <td class="mono">@c.Name</td>
+                            <td class="mono">@(c.OldValue ?? "")</td>
+                            <td class="mono">@(c.NewValue ?? "")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" class="rz-mt-3" JustifyContent="JustifyContent.End">
+                <RadzenButton Text="Back" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small" Click="@(() => _reviewing = false)" Disabled="@_saving" />
+                <RadzenButton Text="Save" Icon="save" ButtonStyle="ButtonStyle.Primary" Size="ButtonSize.Small" Click="@SaveAsync"
+                              IsBusy="@_saving" BusyText="Saving..." Disabled="@(!Validation.IsValid || Changes.Count == 0)" />
+            </RadzenStack>
+        </RadzenCard>
+    }
+    else
+    {
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" JustifyContent="JustifyContent.SpaceBetween" Wrap="FlexWrap.Wrap" Gap="0.5rem">
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                <RadzenText TextStyle="TextStyle.Body2" class="muted rz-m-0">@_rows.Count(r => !r.IsRemoved) tag(s)</RadzenText>
+                @if (CanEdit)
+                {
+                    <RadzenButton Text="Add tag" Icon="add" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@AddRow" />
+                    <RadzenButton Text="Generate connection tags" Icon="hub" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light"
+                                  Click="@GenerateConnectionTags" Disabled="@(!_canGenerate)"
+                                  title="Fill in conn-out-* and conn-in-* tags from the graph. Review before saving." />
+                }
+            </RadzenStack>
+            <RadzenTextBox @bind-Value="_filter" Immediate="true" Placeholder="Filter tags..." Style="min-width: 200px;" aria-label="Filter tags" />
+        </RadzenStack>
+
+        <table class="roles-table tags-table">
+            <thead>
+                <tr><th style="width: 30%;">Name</th><th>Value</th><th style="width: 90px;">Status</th>@if (CanEdit) { <th style="width: 110px;">Actions</th> }</tr>
+            </thead>
+            <tbody>
+                @if (!VisibleRows.Any())
+                {
+                    <tr><td colspan="4" class="muted">No tags.</td></tr>
+                }
+                @foreach (var row in VisibleRows)
+                {
+                    var rowErrors = RowErrors(row);
+                    <tr class="@(row.IsRemoved ? "row-overridden" : "")">
+                        <td>
+                            @if (row.IsEditing && !row.IsRemoved)
+                            {
+                                <RadzenTextBox @bind-Value="row.Name" Immediate="true" Style="width: 100%;" aria-label="Tag name" />
+                            }
+                            else
+                            {
+                                <span class="mono">@row.Name</span>
+                            }
+                            @if (row.IsGenerated)
+                            {
+                                <RadzenBadge Text="Generated" Shade="Shade.Lighter" IsPill="true" BadgeStyle="BadgeStyle.Info" class="rz-ml-1"
+                                             title="Managed by connection tagging; overwritten when connection tags are regenerated." />
+                            }
+                        </td>
+                        <td>
+                            @if (row.IsEditing && !row.IsRemoved)
+                            {
+                                <RadzenTextBox @bind-Value="row.Value" Immediate="true" Style="width: 100%;" aria-label="Tag value" />
+                                <RadzenText TextStyle="TextStyle.Caption" class="@(row.Value.Length > TagValidator.MaxValueLength ? "rz-color-danger rz-m-0" : "muted rz-m-0")">
+                                    @row.Value.Length/@TagValidator.MaxValueLength
+                                </RadzenText>
+                            }
+                            else
+                            {
+                                <span class="mono" style="word-break: break-all;">@row.Value</span>
+                            }
+                            @if (Validator.IsSecretLike(row.Name, row.Value))
+                            {
+                                <RadzenIcon Icon="warning" IconStyle="IconStyle.Warning" title="This value looks like a secret. Tags are visible to anyone with Reader access." />
+                            }
+                            @foreach (var e in rowErrors)
+                            {
+                                <div class="validation-message">@e</div>
+                            }
+                        </td>
+                        <td>
+                            @if (row.IsRemoved) { <RadzenBadge Text="Removed" Shade="Shade.Lighter" IsPill="true" BadgeStyle="BadgeStyle.Danger" /> }
+                            else if (row.IsNew) { <RadzenBadge Text="Added" Shade="Shade.Lighter" IsPill="true" BadgeStyle="BadgeStyle.Success" /> }
+                            else if (row.IsChanged) { <RadzenBadge Text="Changed" Shade="Shade.Lighter" IsPill="true" BadgeStyle="BadgeStyle.Warning" /> }
+                        </td>
+                        @if (CanEdit)
+                        {
+                            <td>
+                                @if (!row.IsRemoved)
+                                {
+                                    <RadzenButton Icon="@(row.IsEditing ? "check" : "edit")" Variant="Variant.Text" Size="ButtonSize.ExtraSmall"
+                                                  title="@(row.IsEditing ? "Done" : "Edit")" Click="@(() => row.IsEditing = !row.IsEditing)" />
+                                    <RadzenButton Icon="delete" Variant="Variant.Text" Size="ButtonSize.ExtraSmall" title="Delete" Click="@(() => Remove(row))" />
+                                }
+                                @if (row.IsRemoved || row.IsChanged)
+                                {
+                                    <RadzenButton Icon="undo" Variant="Variant.Text" Size="ButtonSize.ExtraSmall" title="Undo" Click="@(() => Undo(row))" />
+                                }
+                            </td>
+                        }
+                    </tr>
+                }
+            </tbody>
+        </table>
+
+        @foreach (var e in Validation.Errors.Where(e => e.TagName is null))
+        {
+            <div class="validation-message">@e.Message</div>
+        }
+
+        @if (CanEdit)
+        {
+            <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" JustifyContent="JustifyContent.End">
+                <RadzenButton Text="Discard" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small" Click="@Discard" Disabled="@(Changes.Count == 0)" />
+                <RadzenButton Text="@($"Review changes ({Changes.Count})")" Icon="fact_check" ButtonStyle="ButtonStyle.Primary" Size="ButtonSize.Small"
+                              Click="@(() => _reviewing = true)" Disabled="@(Changes.Count == 0 || !Validation.IsValid)" />
+            </RadzenStack>
+        }
+    }
+</RadzenStack>
+
+@code {
+    [Parameter, EditorRequired] public ResourceDetails Details { get; set; } = default!;
+    [Parameter] public ResourceTagDiff? Preload { get; set; }
+    [Parameter] public EventCallback OnChanged { get; set; }
+
+    private Dictionary<string, string> _baseline = new(StringComparer.OrdinalIgnoreCase);
+    private List<TagRow> _rows = new();
+    private bool? _canEdit;
+    private bool _canGenerate;
+    private bool _reviewing;
+    private bool _saving;
+    private bool _externalChange;
+    private string _filter = "";
+    private string? _error;
+    private TagWriteResult? _conflict;
+    private List<string> _generatorWarnings = new();
+    private string? _sessionKey;
+    private readonly CancellationTokenSource _cts = new();
+
+    private bool CanEdit => Details.IsTaggable && Writer.IsEnabled && _canEdit != false;
+
+    private bool IsStale => DateTimeOffset.UtcNow - Details.ScannedUtc > TimeSpan.FromHours(TaggingOptions.Value.StaleScanWarningHours);
+
+    private IReadOnlyList<TagChange> Changes => TagDiffBuilder.Build(_baseline, _rows);
+
+    private TagValidationResult Validation => Validator.ValidateSet(
+        _rows.Where(r => !r.IsRemoved).Select(r => new KeyValuePair<string, string>(r.Name, r.Value ?? "")), Details.ArmType, _baseline);
+
+    private IEnumerable<TagRow> VisibleRows => string.IsNullOrWhiteSpace(_filter)
+        ? _rows
+        : _rows.Where(r => r.Name.Contains(_filter, StringComparison.OrdinalIgnoreCase) || r.Value.Contains(_filter, StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
+    {
+        Load(Details.Tags);
+        if (Preload is { Changes.Count: > 0 } preload && Details.IsTaggable)
+        {
+            ApplyChangesToRows(preload.Changes);
+            _generatorWarnings.AddRange(preload.Warnings);
+        }
+
+        var user = await UserContext.GetUserAsync();
+        _sessionKey = InventorySessionStore.KeyFor(user);
+        _canGenerate = Store.Get(user)?.Index?.NodesById.TryGetValue(Details.Id, out var node) == true && ConnectionTagGenerator.IsCandidate(node);
+        Store.TagsChanged += OnTagsChanged;
+
+        if (Details.IsTaggable && Writer.IsEnabled) _ = CheckPermissionAsync();
+    }
+
+    private async Task CheckPermissionAsync()
+    {
+        try
+        {
+            var allowed = await Inspector.CanWriteTagsAsync(Details, _cts.Token);
+            await InvokeAsync(() =>
+            {
+                _canEdit = allowed;
+                StateHasChanged();
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            // The dialog was closed.
+        }
+    }
+
+    private void Load(IReadOnlyDictionary<string, string> tags)
+    {
+        _baseline = new Dictionary<string, string>(tags, StringComparer.OrdinalIgnoreCase);
+        _rows = TagDiffBuilder.ToRows(_baseline);
+        foreach (var r in _rows) r.IsGenerated = Generator.IsOwned(r.Name);
+        _reviewing = false;
+        _externalChange = false;
+    }
+
+    private void AddRow() => _rows.Add(new TagRow { IsEditing = true });
+
+    private void Remove(TagRow row)
+    {
+        if (row.IsNew) _rows.Remove(row);
+        else
+        {
+            row.IsRemoved = true;
+            row.IsEditing = false;
+        }
+    }
+
+    private void Undo(TagRow row)
+    {
+        if (row.IsNew)
+        {
+            _rows.Remove(row);
+            return;
+        }
+        row.Name = row.OriginalName;
+        row.Value = row.OriginalValue;
+        row.IsRemoved = false;
+        row.IsEditing = false;
+    }
+
+    private void Discard()
+    {
+        Load(_baseline);
+        _generatorWarnings.Clear();
+    }
+
+    private IEnumerable<string> RowErrors(TagRow row)
+    {
+        if (row.IsRemoved) yield break;
+        if (row.IsNew || row.IsChanged)
+        {
+            foreach (var e in Validator.ValidateName(row.Name, Details.ArmType).Errors) yield return e.Message;
+            foreach (var e in Validator.ValidateValue(row.Name, row.Value).Errors) yield return e.Message;
+        }
+        if (!string.IsNullOrWhiteSpace(row.Name)
+            && _rows.Count(r => !r.IsRemoved && string.Equals(r.Name.Trim(), row.Name.Trim(), StringComparison.OrdinalIgnoreCase)) > 1)
+        {
+            yield return "Duplicate tag name (names are case-insensitive).";
+        }
+    }
+
+    /// <summary>Puts changes (generated or rebased) into the working copy as pending edits.</summary>
+    private void ApplyChangesToRows(IEnumerable<TagChange> changes)
+    {
+        foreach (var c in changes)
+        {
+            var row = _rows.FirstOrDefault(r => string.Equals(r.Name.Trim(), c.Name, StringComparison.OrdinalIgnoreCase)
+                                                || (r.IsRemoved && string.Equals(r.OriginalName, c.Name, StringComparison.OrdinalIgnoreCase)));
+            switch (c.Kind)
+            {
+                case TagChangeKind.Remove:
+                    if (row is null) break;
+                    if (row.IsNew) _rows.Remove(row);
+                    else row.IsRemoved = true;
+                    break;
+                default:
+                    if (row is null)
+                    {
+                        _rows.Add(new TagRow { Name = c.Name, Value = c.NewValue ?? "", IsGenerated = Generator.IsOwned(c.Name) });
+                    }
+                    else
+                    {
+                        row.IsRemoved = false;
+                        row.Name = c.Name;
+                        row.Value = c.NewValue ?? "";
+                    }
+                    break;
+            }
+        }
+    }
+
+    private async Task GenerateConnectionTags()
+    {
+        var session = Store.Get(await UserContext.GetUserAsync());
+        if (session?.Index is null || session.Snapshot is null) return;
+        ResourceTagDiff diff;
+        lock (session.SyncRoot)
+        {
+            diff = Generator.Generate(session.Index, Details.Id, session.Snapshot.ScannedUtc);
+        }
+        if (!diff.IsValid)
+        {
+            _error = string.Join(" ", diff.Errors);
+            return;
+        }
+
+        // Rebase the generated changes onto the working copy: owned tags not in the generated set are removed.
+        var desired = TagDiffBuilder.Desired(_rows);
+        var generated = TagDiffBuilder.Apply(diff.BaselineTags, diff.Changes);
+        foreach (var name in desired.Keys.Where(Generator.IsOwned).ToList()) desired.Remove(name);
+        foreach (var (k, v) in generated.Where(t => Generator.IsOwned(t.Key))) desired[k] = v;
+        ApplyChangesToRows(TagDiffBuilder.Diff(TagDiffBuilder.Desired(_rows), desired));
+
+        _generatorWarnings = diff.Warnings.ToList();
+        if (Changes.Count == 0) Notifications.Notify(NotificationSeverity.Info, "Connection tags", "Connection tags are already up to date.");
+    }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        _error = null;
+        _conflict = null;
+        try
+        {
+            var diff = new ResourceTagDiff(Details.Id, Details.Label, Details.Type, Details.ArmType, Details.TenantId ?? "", _baseline, Changes);
+            var result = await Writer.ApplyAsync(diff, _cts.Token);
+            switch (result.Outcome)
+            {
+                case TagWriteOutcome.Succeeded:
+                    Load(result.NewTags ?? _baseline);
+                    _generatorWarnings.Clear();
+                    Notifications.Notify(NotificationSeverity.Success, "Tags saved", $"Tags for {Details.Label} were updated.");
+                    await OnChanged.InvokeAsync();
+                    break;
+                case TagWriteOutcome.Conflict:
+                    _conflict = result;
+                    _reviewing = false;
+                    break;
+                default:
+                    _error = result.Message;
+                    _reviewing = false;
+                    if (result.Outcome == TagWriteOutcome.Forbidden) _canEdit = false;
+                    Notifications.Notify(NotificationSeverity.Error, "Tags not saved", result.Message ?? "");
+                    break;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // The dialog was closed.
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ReloadFromConflictAsync()
+    {
+        _saving = true;
+        if (_conflict?.NewTags is { } current)
+        {
+            await Sync.ApplyAsync(Details.Id, current);
+            Load(current);
+        }
+        _conflict = null;
+        _saving = false;
+        await OnChanged.InvokeAsync();
+    }
+
+    /// <summary>Rebase: the current Azure tags become the baseline, and the user's edits are re-applied for confirmation.</summary>
+    private async Task KeepMineAsync()
+    {
+        if (_conflict?.NewTags is not { } current) return;
+        _saving = true;
+        var mine = TagDiffBuilder.Build(_baseline, _rows);
+        await Sync.ApplyAsync(Details.Id, current);
+        Load(current);
+        ApplyChangesToRows(mine);
+        _conflict = null;
+        _reviewing = Changes.Count > 0;
+        _saving = false;
+        await OnChanged.InvokeAsync();
+    }
+
+    private async Task ReloadFromSessionAsync()
+    {
+        if (await Inspector.GetAsync(Details.Id) is { } fresh) Load(fresh.Tags);
+        _externalChange = false;
+    }
+
+    private void OnTagsChanged(string sessionKey, string resourceId)
+    {
+        if (_saving || sessionKey != _sessionKey || !string.Equals(resourceId, Details.Id, StringComparison.OrdinalIgnoreCase)) return;
+        _ = InvokeAsync(async () =>
+        {
+            if (Changes.Count == 0) await ReloadFromSessionAsync();
+            else _externalChange = true;
+            StateHasChanged();
+        });
+    }
+
+    private static BadgeStyle KindStyle(TagChangeKind kind) => kind switch
+    {
+        TagChangeKind.Add => BadgeStyle.Success,
+        TagChangeKind.Remove => BadgeStyle.Danger,
+        _ => BadgeStyle.Warning
+    };
+
+    public void Dispose()
+    {
+        Store.TagsChanged -= OnTagsChanged;
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+}

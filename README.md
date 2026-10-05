@@ -18,7 +18,8 @@ See [Docs/implementation-plan.md](Docs/implementation-plan.md) for the full desi
 
 - **User identity drives every Azure call.** ARM, Resource Graph, and Kudu calls use the signed-in user's delegated token. The app never reads customer resources with its own identity.
 - **Secrets are never stored or shown.** `ConfigEntry` has no value property; only identifiers (hosts, database, account, container, vault, and secret names) leave the analysis layer. Values render as `••••••`.
-- **Read-only.** No write APIs are called. The MCP server runs with `--read-only` and an allowlist that is enforced on both the server and the client.
+- **Read-only, except for tags you approve.** The only write is to Azure tags (`Microsoft.Resources/tags`), made with the signed-in user's token after the user reviews a diff and clicks Save or Apply. The MCP server runs with `--read-only` and an allowlist that is enforced on both the server and the client.
+- **Resource properties popup and tags.** Click any resource name (Inventory grids, Graph nodes and edge endpoints, the App Configuration header, or resource links in chat) to see all its properties, connections, and tags. The **Tags** tab edits tags with validation, a diff preview, and conflict detection. **Tag connections...** on the Inventory page, or the AI chat, proposes `conn-out-<Type>` / `conn-in-<Type>` tags that list what each resource connects to. The AI can only propose tag changes; it cannot apply them. See [Docs/tags-feature-plan.md](Docs/tags-feature-plan.md).
 - **In-memory, per-user sessions.** Snapshots, graphs, and encrypted AI keys live in a bounded in-memory cache keyed by tenant and object ID, and are cleared on sign-out.
 
 ## Prerequisites
@@ -79,6 +80,7 @@ The suite covers the connection classifier (including the table in section 9.4 o
   - **Reader** lists subscriptions, resources, blob containers, and Container Apps environment variables.
   - **Website Contributor** reads app settings and connection strings (`Microsoft.Web/sites/config/list/action`) and Kudu files (`Microsoft.Web/sites/publish/action`). It does not include `*/read`, so full results need **Reader and Website Contributor** together (or Contributor/Owner).
   - Reader-only users see `AccessDenied` badges, and the scan issues dialog names the exact missing role, the affected subscriptions, and the `az role assignment create` commands to fix it. The same table is on the setup page and under **Required Azure roles** on the home page.
+  - **Tag Contributor** (optional) edits tags (`Microsoft.Resources/tags/write`). Without it, the Tags tab is read-only.
 - SCM sites reachable only through private endpoints cannot be read; app settings from ARM still work.
 - The Anthropic and Google AI adapters are text-only and use the grounding fallback instead of tool calling.
 - Azure OpenAI and Foundry deployment names cannot be listed with an API key, so they are entered manually.

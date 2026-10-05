@@ -3,13 +3,17 @@
 <div class="chat-messages" @ref="_container">
     @foreach (var message in Messages)
     {
-        if (message.Role == ChatRoleKind.Tool && message.ToolCall is not null)
+        if (message.ProposalId is { } proposalId)
+        {
+            <TagProposalCard ProposalId="@proposalId" />
+        }
+        else if (message.Role == ChatRoleKind.Tool && message.ToolCall is not null)
         {
             <ToolCallCard Call="@message.ToolCall" />
         }
         else
         {
-            <MessageBubble Message="@message" />
+            <MessageBubble Message="@message" IsKnownResource="@IsKnownResource" />
         }
     }
     @ChildContent
@@ -19,6 +23,7 @@
     [Parameter] public IReadOnlyList<ChatMessageItem> Messages { get; set; } = [];
     [Parameter] public RenderFragment? ChildContent { get; set; }
     [Parameter] public IJSObjectReference? Module { get; set; }
+    [Parameter] public Func<string, bool>? IsKnownResource { get; set; }
 
     private ElementReference _container;
 
