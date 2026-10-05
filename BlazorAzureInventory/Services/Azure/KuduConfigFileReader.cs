@@ -117,7 +117,7 @@ public sealed class KuduConfigFileReader(HttpClient http, ScmHostValidator valid
         throw status switch
         {
             401 or 403 => new KuduException(ConfigReadStatus.AccessDenied, ScanIssueKind.AccessDenied,
-                $"{status}: SCM access denied. Requires Website Contributor and SCM access."),
+                $"{status}: SCM access denied. {AzureRoleRequirements.ConfigFiles.Hint}"),
             404 => new KuduException(ConfigReadStatus.NotFound, ScanIssueKind.NotFound, "404: File or folder not found."),
             429 => new KuduException(ConfigReadStatus.Error, ScanIssueKind.Throttled, "429: SCM requests throttled."),
             >= 300 and < 400 => new KuduException(ConfigReadStatus.Error, ScanIssueKind.Unexpected, $"{status}: Redirects are not followed."),

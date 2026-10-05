@@ -18,8 +18,37 @@
             </RadzenDataGridColumn>
         </Columns>
     </RadzenDataGrid>
+    @if (_missing.Count > 0)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" Shade="Shade.Lighter" AllowClose="false" Size="AlertSize.Small">
+            <RadzenStack Gap="0.5rem">
+                <strong>Missing Azure roles detected</strong>
+                @foreach (var m in _missing)
+                {
+                    <div>
+                        <strong>@m.Role</strong> (@string.Join(", ", m.Requirements.Select(r => r.Permission)))
+                        is needed to @string.Join("; ", m.Requirements.Select(r => r.Purpose.ToLowerInvariant()))
+                        (@m.IssueCount issue@(m.IssueCount == 1 ? "" : "s")) on:
+                        <ul class="rz-m-0">
+                            @foreach (var id in m.SubscriptionIds)
+                            {
+                                <li>@SubscriptionName(id) <span class="mono muted">(@id)</span></li>
+                            }
+                            @if (m.SubscriptionIds.Count == 0)
+                            {
+                                <li>the selected subscriptions</li>
+                            }
+                        </ul>
+                    </div>
+                }
+                <span>@AzureRoleRequirements.Alternatives also include these. Ask a subscription Owner or User Access Administrator to run:</span>
+                <pre class="setup-command"><code>@Commands</code></pre>
+                <span>For guest users, use the user's object ID in that directory as <code>--assignee</code>. Then sign out, sign in again, and rescan.</span>
+            </RadzenStack>
+        </RadzenAlert>
+    }
     <RadzenAlert AlertStyle="AlertStyle.Info" Shade="Shade.Lighter" AllowClose="false" Size="AlertSize.Small">
-        Ask an owner to grant the required role, or check network restrictions on the affected resources.
+        For other issues, check network restrictions (for example private-endpoint-only SCM sites) on the affected resources.
     </RadzenAlert>
     <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End">
         <RadzenButton Text="Close" ButtonStyle="ButtonStyle.Light" Click="@(() => DialogService.Close())" />
@@ -28,6 +57,20 @@
 
 @code {
     [Parameter] public IReadOnlyList<ScanIssue> Issues { get; set; } = [];
+    [Parameter] public IReadOnlyList<SubscriptionInfo> Subscriptions { get; set; } = [];
+    [Parameter] public string? Assignee { get; set; }
+
+    private IReadOnlyList<MissingRole> _missing = [];
+
+    protected override void OnParametersSet() => _missing = AzureRoleRequirements.Detect(Issues);
+
+    private string SubscriptionName(string id) =>
+        Subscriptions.FirstOrDefault(s => s.SubscriptionId.Equals(id, StringComparison.OrdinalIgnoreCase))?.DisplayName ?? id;
+
+    private string Commands => string.Join(Environment.NewLine,
+        from m in _missing
+        from id in m.SubscriptionIds.DefaultIfEmpty("<subscription-id>")
+        select $"az role assignment create --assignee \"{Assignee ?? "<user@domain>"}\" --role \"{m.Role}\" --scope \"/subscriptions/{id}\"");
 
     private static BadgeStyle KindStyle(ScanIssueKind kind) => kind switch
     {

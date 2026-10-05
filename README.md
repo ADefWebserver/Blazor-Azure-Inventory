@@ -75,7 +75,10 @@ The suite covers the connection classifier (including the table in section 9.4 o
 
 ## Notes and limitations
 
-- Reading app settings and Kudu files requires **Website Contributor** (or `Microsoft.Web/sites/config/list/action`). Reader-only users see `AccessDenied` badges and scan issues instead of failures.
+- Azure calls use each signed-in user's own identity, so roles are assigned to users on the subscriptions they scan:
+  - **Reader** lists subscriptions, resources, blob containers, and Container Apps environment variables.
+  - **Website Contributor** reads app settings and connection strings (`Microsoft.Web/sites/config/list/action`) and Kudu files (`Microsoft.Web/sites/publish/action`). It does not include `*/read`, so full results need **Reader and Website Contributor** together (or Contributor/Owner).
+  - Reader-only users see `AccessDenied` badges, and the scan issues dialog names the exact missing role, the affected subscriptions, and the `az role assignment create` commands to fix it. The same table is on the setup page and under **Required Azure roles** on the home page.
 - SCM sites reachable only through private endpoints cannot be read; app settings from ARM still work.
 - The Anthropic and Google AI adapters are text-only and use the grounding fallback instead of tool calling.
 - Azure OpenAI and Foundry deployment names cannot be listed with an API key, so they are entered manually.

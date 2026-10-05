@@ -1,0 +1,31 @@
+@* Azure RBAC roles the signed-in user needs, from AzureRoleRequirements. *@
+<RadzenStack Gap="0.5rem">
+    <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">
+        Every Azure call uses the signed-in user's own identity, so assign these roles <strong>to each user</strong> on every
+        subscription (or resource group) they will scan. <strong>@AzureRoleRequirements.WebsiteContributor</strong> does not include
+        <code>*/read</code>, so full results need <strong>@AzureRoleRequirements.Reader</strong> and
+        <strong>@AzureRoleRequirements.WebsiteContributor</strong> together (or @AzureRoleRequirements.Alternatives).
+        With Reader only, the inventory works but app settings and config files show <code>AccessDenied</code>.
+    </RadzenText>
+    <table class="roles-table">
+        <thead>
+            <tr><th>Needed for</th><th>Role</th><th>Permission</th></tr>
+        </thead>
+        <tbody>
+            @foreach (var r in AzureRoleRequirements.All)
+            {
+                <tr><td>@r.Purpose</td><td><strong>@r.Role</strong></td><td><code>@r.Permission</code></td></tr>
+            }
+        </tbody>
+    </table>
+    <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">
+        To assign them with the Azure CLI (run as an Owner or User Access Administrator):
+    </RadzenText>
+    <pre class="setup-command"><code>@Commands</code></pre>
+</RadzenStack>
+
+@code {
+    private static readonly string Commands = string.Join(Environment.NewLine,
+        $"az role assignment create --assignee \"<user@domain>\" --role \"{AzureRoleRequirements.Reader}\" --scope \"/subscriptions/<subscription-id>\"",
+        $"az role assignment create --assignee \"<user@domain>\" --role \"{AzureRoleRequirements.WebsiteContributor}\" --scope \"/subscriptions/<subscription-id>\"");
+}

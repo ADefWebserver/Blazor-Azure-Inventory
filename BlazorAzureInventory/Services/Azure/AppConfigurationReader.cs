@@ -25,9 +25,10 @@ public sealed class AppConfigurationReader(
     KuduConfigFileReader kudu,
     ConfigFlattener flattener,
     ConfigAnalyzer analyzer,
-    IOptions<InventoryOptions> options)
+    IOptions<InventoryOptions> options,
+    ILogger<AppConfigurationReader> logger)
 {
-    private const string SettingsAccessHint = "Requires Microsoft.Web/sites/config/list/action (Website Contributor)";
+    private static readonly string SettingsAccessHint = AzureRoleRequirements.AppSettings.Hint;
     private static readonly string[] EnvironmentKeys = ["ASPNETCORE_ENVIRONMENT", "DOTNET_ENVIRONMENT", "AZURE_FUNCTIONS_ENVIRONMENT"];
 
     public async Task<AppReadResult> ReadAppServiceAsync(AzureResourceInfo app, Action<string>? onStage, CancellationToken ct)
@@ -94,6 +95,8 @@ public sealed class AppConfigurationReader(
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             var (kind, message) = ScanErrors.Classify(ex, SettingsAccessHint);
+            if (kind == ScanIssueKind.Unexpected)
+                logger.LogWarning(ex, "Unexpected error reading app settings for {ResourceId}", app.Id);
             settingsStatus = kind switch
             {
                 ScanIssueKind.AccessDenied or ScanIssueKind.ConsentRequired => ConfigReadStatus.AccessDenied,
@@ -185,7 +188,7 @@ public sealed class AppConfigurationReader(
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
-            var (kind, message) = ScanErrors.Classify(ex);
+            var (kind, message) = ScanErrors.Classify(ex, AzureRoleRequirements.ContainerApps.Hint);
             var status = kind is ScanIssueKind.AccessDenied or ScanIssueKind.ConsentRequired ? ConfigReadStatus.AccessDenied : ConfigReadStatus.Error;
             return new AppReadResult(
                 new AppConfigAnalysis(app.Id, null, status, ConfigReadStatus.NotScanned, [], []),
@@ -231,7 +234,7 @@ public sealed class AppConfigurationReader(
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
-            var (kind, message) = ScanErrors.Classify(ex);
+            var (kind, message) = ScanErrors.Classify(ex, AzureRoleRequirements.ConfigFiles.Hint);
             var status = ex is KuduException k ? k.Status : kind == ScanIssueKind.AccessDenied ? ConfigReadStatus.AccessDenied : ConfigReadStatus.Error;
             return (status, new ScanIssue(app.Id, "Reading config files", kind, message));
         }
@@ -249,7 +252,9 @@ public sealed class AppConfigurationReader(
             return (new HashSet<string>(names.AppSettingNames ?? [], StringComparer.OrdinalIgnoreCase),
                     new HashSet<string>(names.ConnectionStringNames ?? [], StringComparer.OrdinalIgnoreCase));
         }
-        catch (global::Azure.RequestFailedException)
+        // Sticky names are optional metadata. For Reader-only callers ARM masks the response (id: null), which the
+        // SDK fails to deserialize with ArgumentNullException; that must not block the settings read itself.
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             return ([], []);
         }

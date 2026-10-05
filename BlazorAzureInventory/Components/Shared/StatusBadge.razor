@@ -21,8 +21,8 @@
     {
         ConfigReadStatus.Read => "Read successfully.",
         ConfigReadStatus.AccessDenied when IsConfigFiles =>
-            "Requires Website Contributor and SCM access. Apps with private-endpoint-only SCM sites cannot be read.",
-        ConfigReadStatus.AccessDenied => "Requires Website Contributor (Microsoft.Web/sites/config/list/action).",
+            $"{AzureRoleRequirements.ConfigFiles.Hint} Apps with private-endpoint-only SCM sites cannot be read.",
+        ConfigReadStatus.AccessDenied => AzureRoleRequirements.AppSettings.Hint,
         ConfigReadStatus.NotFound when IsConfigFiles => "No appsettings*.json files were found in site/wwwroot. Custom-container apps usually have none.",
         ConfigReadStatus.NotFound => "Not found.",
         ConfigReadStatus.Error => "An error occurred while reading. See scan issues.",

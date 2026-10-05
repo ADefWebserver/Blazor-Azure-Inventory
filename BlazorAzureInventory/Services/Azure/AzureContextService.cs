@@ -34,12 +34,14 @@ public sealed class AzureContextService(ArmClientFactory armFactory, UserContext
             try
             {
                 var client = await armFactory.GetAsync(tenantId);
+                var before = subscriptions.Count;
                 await foreach (var sub in client.GetSubscriptions().GetAllAsync(ct))
                 {
                     subscriptions.Add(new SubscriptionInfo(
                         sub.Data.SubscriptionId, sub.Data.DisplayName ?? sub.Data.SubscriptionId,
                         sub.Data.TenantId?.ToString() ?? tenantId, sub.Data.State?.ToString() ?? "Unknown"));
                 }
+                logger.LogInformation("Tenant {TenantId} returned {Count} subscriptions for user {ObjectId}", tenantId, subscriptions.Count - before, user.GetObjectId());
                 tenants.Add(new TenantInfo(tenantId, displayName, tenant.Data.DefaultDomain));
             }
             catch (Exception ex) when (ScanErrors.IsConsentRequired(ex))

@@ -58,7 +58,13 @@
     {
         <RadzenAlert AlertStyle="AlertStyle.Warning" Shade="Shade.Lighter" AllowClose="false">
             <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" JustifyContent="JustifyContent.SpaceBetween">
-                <span>@_snapshot.Issues.Count resource@(_snapshot.Issues.Count == 1 ? "" : "s") could not be fully read. Results are partial.</span>
+                <span>
+                    @_snapshot.Issues.Count resource@(_snapshot.Issues.Count == 1 ? "" : "s") could not be fully read. Results are partial.
+                    @if (AzureRoleRequirements.Detect(_snapshot.Issues) is { Count: > 0 } missingRoles)
+                    {
+                        <strong> Missing Azure role@(missingRoles.Count == 1 ? "" : "s"): @string.Join(", ", missingRoles.Select(m => m.Role)).</strong>
+                    }
+                </span>
                 <RadzenButton Text="View issues" Variant="Variant.Text" Size="ButtonSize.Small" Click="@ShowIssuesAsync" />
             </RadzenStack>
         </RadzenAlert>
@@ -193,10 +199,19 @@
         Nav.NavigateTo(TenantAccess.BuildUrl(tenant.TenantId, "/inventory", claims), forceLoad: true);
     }
 
-    private Task ShowIssuesAsync() => DialogService.OpenAsync<ScanIssuesDialog>(
-        $"Scan issues ({_snapshot!.Issues.Count})",
-        new Dictionary<string, object?> { [nameof(ScanIssuesDialog.Issues)] = _snapshot.Issues },
-        new DialogOptions { Width = "960px", Resizable = true });
+    private async Task ShowIssuesAsync()
+    {
+        var user = await UserContext.GetUserAsync();
+        await DialogService.OpenAsync<ScanIssuesDialog>(
+            $"Scan issues ({_snapshot!.Issues.Count})",
+            new Dictionary<string, object?>
+            {
+                [nameof(ScanIssuesDialog.Issues)] = _snapshot.Issues,
+                [nameof(ScanIssuesDialog.Subscriptions)] = _snapshot.Subscriptions,
+                [nameof(ScanIssuesDialog.Assignee)] = user.FindFirst("preferred_username")?.Value
+            },
+            new DialogOptions { Width = "960px", Resizable = true });
+    }
 
     private void ViewConfiguration(AzureResourceInfo resource) =>
         Nav.NavigateTo($"appconfiguration?id={Uri.EscapeDataString(resource.Id)}");

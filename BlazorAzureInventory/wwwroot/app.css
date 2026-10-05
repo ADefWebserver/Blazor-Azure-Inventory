@@ -44,6 +44,9 @@ h1:focus {
 .setup-steps { padding-left: 1.5rem; margin: 0; }
 .setup-steps li { margin-bottom: 0.5rem; }
 .setup-command { background: #eef2f8; padding: 0.5rem 0.75rem; border-radius: 6px; overflow-x: auto; margin: 0.25rem 0 0; white-space: pre; }
+.roles-table { border-collapse: collapse; width: 100%; font-size: 0.875rem; }
+.roles-table th, .roles-table td { text-align: left; padding: 0.35rem 0.6rem; border-bottom: 1px solid var(--rz-base-300); vertical-align: top; }
+.roles-table th { font-weight: 600; }
 .feature-icon { font-size: 2rem !important; color: var(--rz-primary); background: var(--rz-primary-lighter); border-radius: 8px; padding: 0.5rem; }
 
 /* Summary cards */

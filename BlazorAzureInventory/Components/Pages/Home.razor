@@ -93,6 +93,13 @@
             </RadzenCard>
         </RadzenColumn>
     </RadzenRow>
+
+    @if (missing.Count == 0)
+    {
+        <RadzenFieldset AllowCollapse="true" Collapsed="true" Text="Required Azure roles">
+            <RequiredRoles />
+        </RadzenFieldset>
+    }
 </RadzenStack>
 
 @code {

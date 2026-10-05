@@ -1,5 +1,4 @@
 using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.Identity.Web;
 
@@ -9,7 +8,7 @@ namespace BlazorAzureInventory.Services.Auth;
 /// Interactive sign-in against a specific (non-home) tenant so the user can satisfy that tenant's consent or MFA
 /// requirement (AADSTS65001 / AADSTS50076). The default challenge targets the configured multi-tenant authority,
 /// which resolves to the user's home tenant and therefore never clears the other tenant's requirement.
-/// The resulting tokens are cached under the same account and the user's existing session identity is kept.
+/// The resulting tokens are cached under the same account; the callback does not sign in, so the existing session is kept.
 /// </summary>
 public static class TenantAccess
 {
@@ -17,6 +16,7 @@ public static class TenantAccess
     private const string TenantItem = "tenant_access.tenant";
     private const string LoginHintItem = "tenant_access.login_hint";
     private const string ClaimsItem = "tenant_access.claims";
+    private const string AccountItem = "tenant_access.account";
 
     public static bool IsTenantAccess(AuthenticationProperties? properties) =>
         properties?.Items.ContainsKey(TenantItem) == true;
@@ -60,16 +60,24 @@ public static class TenantAccess
                     if (onTicket is not null) await onTicket(context);
                     if (context.Result is not null || !IsTenantAccess(context.Properties)) return;
 
-                    var existing = await context.HttpContext.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
-                    var existingAccount = existing.Principal?.GetMsalAccountId();
-                    if (existingAccount is null || !string.Equals(existingAccount, context.Principal?.GetMsalAccountId(), StringComparison.OrdinalIgnoreCase))
+                    // The session cookie is SameSite=Lax and is not sent on the cross-site form_post callback, so the expected
+                    // account travels in the protected state instead.
+                    var tenantId = context.Properties!.Items[TenantItem];
+                    context.Properties.Items.TryGetValue(AccountItem, out var expectedAccount);
+                    var logger = context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(TenantAccess));
+                    if (string.IsNullOrEmpty(expectedAccount) ||
+                        !string.Equals(expectedAccount, context.Principal?.GetMsalAccountId(), StringComparison.OrdinalIgnoreCase))
                     {
+                        logger.LogWarning("Tenant access for {TenantId} rejected: a different account signed in", tenantId);
                         context.Fail("Sign in with the same account that is signed in to this application.");
                         return;
                     }
 
-                    // Keep the home-tenant identity; only the token cache needed the other tenant's tokens.
-                    context.Principal = existing.Principal;
+                    // The other tenant's tokens are already cached for this account; skip sign-in so the existing
+                    // session (home-tenant identity) is left untouched.
+                    logger.LogInformation("Tenant access for {TenantId} granted", tenantId);
+                    context.Response.Redirect(context.ReturnUri is { Length: > 0 } r ? r : "/");
+                    context.HandleResponse();
                 };
             });
         return services;
@@ -83,6 +91,8 @@ public static class TenantAccess
 
         var properties = new AuthenticationProperties { RedirectUri = returnUrl };
         properties.Items[TenantItem] = tenant.ToString();
+        if (context.User.GetMsalAccountId() is not { } account) return Results.Forbid();
+        properties.Items[AccountItem] = account;
         var loginHint = context.User.GetLoginHint() ?? context.User.FindFirst("preferred_username")?.Value;
         if (!string.IsNullOrEmpty(loginHint)) properties.Items[LoginHintItem] = loginHint;
         if (!string.IsNullOrEmpty(claims)) properties.Items[ClaimsItem] = claims;

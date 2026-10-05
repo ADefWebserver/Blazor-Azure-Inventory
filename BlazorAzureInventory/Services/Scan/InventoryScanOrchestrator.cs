@@ -57,7 +57,7 @@ public sealed class InventoryScanOrchestrator(
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)
             {
-                var (kind, message) = ScanErrors.Classify(ex);
+                var (kind, message) = ScanErrors.Classify(ex, AzureRoleRequirements.ResourceGraph.Hint);
                 issues.Add(new ScanIssue($"tenant:{tenantGroup.Key}", stage, kind, message));
             }
             progress.Report(new ScanProgress(stage, ++done, byTenant.Count, tenantName));
@@ -79,7 +79,7 @@ public sealed class InventoryScanOrchestrator(
             }
             catch (Exception ex) when (!token.IsCancellationRequested)
             {
-                var (kind, message) = ScanErrors.Classify(ex);
+                var (kind, message) = ScanErrors.Classify(ex, AzureRoleRequirements.BlobContainers.Hint);
                 issues.Add(new ScanIssue(account.Id, stage, kind, message));
             }
             progress.Report(new ScanProgress(stage, Interlocked.Increment(ref done), accounts.Count, account.Name));
