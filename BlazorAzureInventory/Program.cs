@@ -39,6 +39,7 @@ public class Program
             .EnableTokenAcquisitionToCallDownstreamApi(armScopes)
             .AddInMemoryTokenCaches();
         builder.Services.AddTenantGuard();
+        builder.Services.AddTenantAccess();
         builder.Services.AddSingleton<SetupStatusService>();
 
         builder.Services.AddControllersWithViews().AddMicrosoftIdentityUI();
@@ -131,6 +132,7 @@ public class Program
         app.MapStaticAssets();
         app.MapControllers();
         app.MapPost("/account/logout", LogoutEndpoint.HandleAsync).RequireAuthorization();
+        app.MapGet(TenantAccess.Path, TenantAccess.HandleAsync).RequireAuthorization();
         // Page-level [Authorize] is enforced by AuthorizeRouteView, which renders the "Sign in required" card instead of redirecting.
         app.MapRazorComponents<App>()
             .AddInteractiveServerRenderMode()

@@ -23,6 +23,8 @@ public static class TenantGuard
                 oidc.Events.OnTokenValidated = async context =>
                 {
                     if (previous is not null) await previous(context);
+                    // Tenant-access sign-ins carry the other tenant's tid; TenantAccess restores the original, already-validated identity.
+                    if (TenantAccess.IsTenantAccess(context.Properties)) return;
                     var tenantId = context.Principal?.GetTenantId();
                     if (tenantId is null || !allowed.Contains(tenantId))
                     {

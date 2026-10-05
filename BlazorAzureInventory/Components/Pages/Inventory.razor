@@ -183,14 +183,14 @@
 
     private void GrantAccess(TenantInfo tenant)
     {
-        if (AzureContextService.GetConsentError(tenant.TenantId) is { } ex)
+        string? claims = null;
+        for (var e = AzureContextService.GetConsentError(tenant.TenantId); e is not null; e = e.InnerException)
         {
-            ConsentHandler.HandleException(ex);
+            if (e is MicrosoftIdentityWebChallengeUserException { MsalUiRequiredException.Claims: { Length: > 0 } c }) { claims = c; break; }
+            if (e is Microsoft.Identity.Client.MsalServiceException { Claims: { Length: > 0 } s }) { claims = s; break; }
         }
-        else
-        {
-            Nav.NavigateTo("MicrosoftIdentity/Account/SignIn?redirectUri=%2Finventory", forceLoad: true);
-        }
+
+        Nav.NavigateTo(TenantAccess.BuildUrl(tenant.TenantId, "/inventory", claims), forceLoad: true);
     }
 
     private Task ShowIssuesAsync() => DialogService.OpenAsync<ScanIssuesDialog>(
