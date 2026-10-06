@@ -26,9 +26,24 @@
 </RadzenStack>
 
 @code {
-    private static readonly string Commands = string.Join(Environment.NewLine,
-        $"az role assignment create --assignee \"<user@domain>\" --role \"{AzureRoleRequirements.Reader}\" --scope \"/subscriptions/<subscription-id>\"",
-        $"az role assignment create --assignee \"<user@domain>\" --role \"{AzureRoleRequirements.WebsiteContributor}\" --scope \"/subscriptions/<subscription-id>\"",
-        $"# Optional, to edit tags:",
-        $"az role assignment create --assignee \"<user@domain>\" --role \"{AzureRoleRequirements.TagContributor}\" --scope \"/subscriptions/<subscription-id>\"");
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+
+    private string Commands = BuildCommands(null);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var user = AuthState is null ? null : (await AuthState).User;
+        var assignee = user?.Identity?.IsAuthenticated == true ? user.FindFirst("preferred_username")?.Value : null;
+        Commands = BuildCommands(assignee);
+    }
+
+    private static string BuildCommands(string? assignee)
+    {
+        assignee = string.IsNullOrWhiteSpace(assignee) ? "<user@domain>" : assignee;
+        return string.Join(Environment.NewLine,
+            $"az role assignment create --assignee \"{assignee}\" --role \"{AzureRoleRequirements.Reader}\" --scope \"/subscriptions/<subscription-id>\"",
+            $"az role assignment create --assignee \"{assignee}\" --role \"{AzureRoleRequirements.WebsiteContributor}\" --scope \"/subscriptions/<subscription-id>\"",
+            "# Optional, to edit tags:",
+            $"az role assignment create --assignee \"{assignee}\" --role \"{AzureRoleRequirements.TagContributor}\" --scope \"/subscriptions/<subscription-id>\"");
+    }
 }

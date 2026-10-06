@@ -88,6 +88,29 @@ public class RoleRequirementTests : BunitContext
         Assert.DoesNotContain("Missing Azure roles detected", cut.Markup);
     }
 
+    [Fact]
+    public void RequiredRoles_fills_commands_with_signed_in_user()
+    {
+        var user = new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity(
+            [new System.Security.Claims.Claim("preferred_username", "alex@contoso.com")], "test"));
+
+        var cut = Render<BlazorAzureInventory.Components.Shared.RequiredRoles>(p => p
+            .AddCascadingValue(Task.FromResult(new Microsoft.AspNetCore.Components.Authorization.AuthenticationState(user))));
+
+        var markup = System.Net.WebUtility.HtmlDecode(cut.Markup);
+        Assert.Contains("az role assignment create --assignee \"alex@contoso.com\" --role \"Reader\"", markup);
+        Assert.DoesNotContain("<user@domain>", markup);
+    }
+
+    [Fact]
+    public void RequiredRoles_uses_placeholder_when_signed_out()
+    {
+        var cut = Render<BlazorAzureInventory.Components.Shared.RequiredRoles>(p => p
+            .AddCascadingValue(Task.FromResult(new Microsoft.AspNetCore.Components.Authorization.AuthenticationState(new System.Security.Claims.ClaimsPrincipal()))));
+
+        Assert.Contains("--assignee \"<user@domain>\"", System.Net.WebUtility.HtmlDecode(cut.Markup));
+    }
+
     // Permission payloads shaped like GET {scope}/providers/Microsoft.Authorization/permissions for built-in roles.
     private const string ReaderPerms = """{"value":[{"actions":["*/read"],"notActions":[]}]}""";
     private const string OwnerPerms = """{"value":[{"actions":["*"],"notActions":[]}]}""";
