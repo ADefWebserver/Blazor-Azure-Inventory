@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using BlazorAzureInventory.Models.AI;
 
 namespace BlazorAzureInventory.Models.Options;
 
@@ -59,6 +60,7 @@ public sealed class AIOptions
     public string[] AllowedAzureAIHostSuffixes { get; set; } = [];
     public AIToolOptions Tools { get; set; } = new();
     public AIDefaultOptions Defaults { get; set; } = new();
+    public AIDefaultProviderOptions DefaultProvider { get; set; } = new();
 
     public IReadOnlyList<string> EffectiveAzureAIHostSuffixes =>
         AllowedAzureAIHostSuffixes.Length > 0
@@ -77,6 +79,31 @@ public sealed class AIDefaultOptions
 {
     [Range(0.0, 2.0)] public float Temperature { get; set; } = 0.2f;
     [Range(16, 32768)] public int MaxOutputTokens { get; set; } = 2048;
+}
+
+/// <summary>
+/// Optional app-wide AI provider used by every user who has not entered their own settings. Keep
+/// <see cref="ApiKey"/> in user secrets, environment variables, or Key Vault rather than appsettings.json.
+/// </summary>
+public sealed class AIDefaultProviderOptions
+{
+    /// <summary>One of <see cref="AIServiceType"/>: OpenAI, AzureOpenAI, AzureAIFoundry, Anthropic, GoogleAI.</summary>
+    public string ServiceType { get; set; } = "";
+    public string ApiKey { get; set; } = "";
+    public string Endpoint { get; set; } = "";
+    public string ApiVersion { get; set; } = "";
+    public string DeploymentPath { get; set; } = "";
+    public string ApiProtocol { get; set; } = "";
+    public string AIModel { get; set; } = "";
+
+    public bool TryGetServiceType(out AIServiceType type) =>
+        Enum.TryParse(ServiceType?.Trim(), ignoreCase: true, out type) && Enum.IsDefined(type);
+
+    /// <summary>True when a provider and key are set, plus an endpoint for the Azure providers.</summary>
+    public bool IsConfigured =>
+        TryGetServiceType(out var type)
+        && !string.IsNullOrWhiteSpace(ApiKey)
+        && (type is not (AIServiceType.AzureOpenAI or AIServiceType.AzureAIFoundry) || !string.IsNullOrWhiteSpace(Endpoint));
 }
 
 public sealed class TaggingOptions

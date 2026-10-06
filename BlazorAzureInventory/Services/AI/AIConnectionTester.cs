@@ -11,7 +11,7 @@ public sealed class AIConnectionTester(SessionAISettingsService settings, ChatCl
     public async Task<AIConnectionTestResult> TestAsync(AIProviderSettings provider, CancellationToken ct = default)
     {
         var sw = Stopwatch.StartNew();
-        var key = string.IsNullOrWhiteSpace(provider.ApiKey) ? await settings.GetApiKeyAsync(provider.ServiceType) : provider.ApiKey.Trim();
+        var key = string.IsNullOrWhiteSpace(provider.ApiKey) ? await settings.GetApiKeyAsync(provider) : provider.ApiKey.Trim();
         if (string.IsNullOrEmpty(key)) return Fail("Enter an API key first.", "", "");
         if (string.IsNullOrWhiteSpace(provider.AIModel)) return Fail("Select or enter a model first.", "", "");
 

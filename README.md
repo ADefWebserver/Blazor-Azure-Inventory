@@ -41,6 +41,7 @@ Settings live in [BlazorAzureInventory/appsettings.json](BlazorAzureInventory/ap
 | `AzureMcp:Scopes` | `api://<azinventory-mcp-client-id>/Mcp.Tools.Read` |
 | `AzureMcp:AllowedTools` | Must match the `--tool` list in [AzureMcpServer/Dockerfile](AzureMcpServer/Dockerfile) |
 | `Security:AllowedTenantIds` | Optional tenant allowlist (empty allows any organization) |
+| `AI:DefaultProvider` | Optional app-wide AI provider used by everyone who has not entered their own on **Settings**. Set `ServiceType` (`OpenAI`, `AzureOpenAI`, `AzureAIFoundry`, `Anthropic`, or `GoogleAI`), `ApiKey`, `AIModel`, and for Azure providers `Endpoint` (plus optional `ApiVersion`, `DeploymentPath`, `ApiProtocol`). Leave `ServiceType` or `ApiKey` empty to require each user to supply their own. Keep the key in user secrets, environment variables (`AI__DefaultProvider__ApiKey`), or Key Vault, not in `appsettings.json` |
 
 For local development, replace the `<...>` placeholders in `BlazorAzureInventory/appsettings.Local.json` (web app) and `BlazorAzureInventorySolution.AppHost/appsettings.Local.json` (`mcpTenantId` and `mcpClientId` parameters for the MCP container). Both files are git-ignored, loaded right after `appsettings.{Environment}.json`, and the web app's file is loaded only in Development and never published. While any required value is missing, the home page lists the exact steps to fix it.
 
@@ -50,6 +51,12 @@ Alternatively, override values with user secrets on the `BlazorAzureInventory` p
 dotnet user-secrets --project BlazorAzureInventory set "AzureAd:ClientId" "<client-id>"
 dotnet user-secrets --project BlazorAzureInventory set "AzureAd:ClientCredentials:0:SourceType" "ClientSecret"
 dotnet user-secrets --project BlazorAzureInventory set "AzureAd:ClientCredentials:0:ClientSecret" "<dev-only-secret>"
+
+# Optional: a default AI provider so users do not need their own key
+dotnet user-secrets --project BlazorAzureInventory set "AI:DefaultProvider:ServiceType" "AzureOpenAI"
+dotnet user-secrets --project BlazorAzureInventory set "AI:DefaultProvider:Endpoint" "https://contoso.openai.azure.com/"
+dotnet user-secrets --project BlazorAzureInventory set "AI:DefaultProvider:AIModel" "gpt-4o"
+dotnet user-secrets --project BlazorAzureInventory set "AI:DefaultProvider:ApiKey" "<key>"
 ```
 
 The AppHost asks for the `mcpTenantId` and `mcpClientId` parameters used by the MCP container's incoming authentication.
@@ -64,7 +71,7 @@ dotnet run --project BlazorAzureInventorySolution.AppHost
 dotnet run --project BlazorAzureInventory
 ```
 
-Then select **Connect to Azure**, open **Inventory**, choose subscriptions, and select **Scan**. **Knowledge Graph** and **AI Chat** become available after the first scan. Enter your AI provider key on **Settings**; it is kept only in your session.
+Then select **Connect to Azure**, open **Inventory**, choose subscriptions, and select **Scan**. **Knowledge Graph** and **AI Chat** become available after the first scan. If `AI:DefaultProvider` is configured, chat works right away; otherwise enter your AI provider key on **Settings**. A key you enter is kept only in your session and overrides the default.
 
 ## Test
 

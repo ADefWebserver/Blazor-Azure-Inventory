@@ -27,7 +27,7 @@ public sealed class ChatClientFactory(
         var provider = all.GetOrCreate(all.ActiveServiceType);
         if (!provider.IsConfigured || string.IsNullOrWhiteSpace(provider.AIModel)) return null;
 
-        var key = await settings.GetApiKeyAsync(provider.ServiceType);
+        var key = await settings.GetApiKeyAsync(provider);
         return string.IsNullOrEmpty(key) ? null : await CreateForAsync(provider, key, ct);
     }
 
@@ -115,7 +115,13 @@ public sealed class ChatClientFactory(
         var version = p.ApiVersion.Trim();
         if (!string.IsNullOrWhiteSpace(p.DeploymentPath))
         {
-            return (new Uri(root, p.DeploymentPath.Trim().Trim('/')), version.Length > 0 ? version : DefaultAzureApiVersion);
+            // An absolute or scheme-relative path would bypass the endpoint checks, so it must stay on the endpoint's host.
+            var deploymentBase = new Uri(root, p.DeploymentPath.Trim().Trim('/'));
+            if (!string.Equals(deploymentBase.Host, root.Host, StringComparison.OrdinalIgnoreCase) || deploymentBase.Scheme != root.Scheme)
+            {
+                throw new InvalidOperationException("The deployment path must be relative to the endpoint.");
+            }
+            return (deploymentBase, version.Length > 0 ? version : DefaultAzureApiVersion);
         }
         if (version.Length > 0 && !version.Equals("v1", StringComparison.OrdinalIgnoreCase) && !version.Equals("preview", StringComparison.OrdinalIgnoreCase))
         {

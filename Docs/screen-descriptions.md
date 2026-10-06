@@ -376,7 +376,7 @@ A `RadzenCard` for the selected node:
 
 ## 9. Settings (AI Provider Settings)
 
-**Purpose:** let each user enter their own AI provider and API key for the current session. Based on the ported `AIServiceSettingsEditor` component, restyled with Radzen.
+**Purpose:** let each user enter their own AI provider and API key for the current session. Based on the ported `AIServiceSettingsEditor` component, restyled with Radzen. When `AI:DefaultProvider` is configured in appsettings, its values pre-fill the form and its key is used (never displayed) until the user enters their own; the default key is only sent to the configured endpoint host.
 
 ### 9.1 Layout
 
@@ -387,7 +387,7 @@ A `RadzenCard` for the selected node:
 | Field | Control | Visible For |
 |---|---|---|
 | Provider | `RadzenDropDown`: OpenAI, Azure OpenAI, Microsoft Foundry, Anthropic, Google AI | All |
-| API key | `RadzenPassword`. After saving, shows `••••••••a1b2` (last 4 characters only) | All |
+| API key | `RadzenPassword`. After saving, shows `••••••••a1b2` (last 4 characters only). When the default key applies, shows "Using the default key configured for this app" | All |
 | Endpoint | `RadzenTextBox`, for example `https://contoso.openai.azure.com/` | Azure OpenAI, Foundry |
 | API version | `RadzenTextBox` | Azure OpenAI |
 | Deployment / path | `RadzenTextBox` | Azure OpenAI, Foundry |

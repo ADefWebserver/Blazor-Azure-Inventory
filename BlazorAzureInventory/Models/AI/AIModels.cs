@@ -35,7 +35,10 @@ public sealed class AIProviderSettings
     public string ApiProtocol { get; set; } = "";
     public string AIModel { get; set; } = "";
 
-    public bool IsConfigured => !string.IsNullOrWhiteSpace(ApiKey) || HasStoredKey;
+    /// <summary>True when no user key is stored and the app-wide default key from configuration applies.</summary>
+    public bool UsesDefaultKey { get; set; }
+
+    public bool IsConfigured => !string.IsNullOrWhiteSpace(ApiKey) || HasStoredKey || UsesDefaultKey;
 
     public FoundryApiProtocol ParsedApiProtocol =>
         Enum.TryParse<FoundryApiProtocol>(ApiProtocol, ignoreCase: true, out var p) ? p : FoundryApiProtocol.Auto;

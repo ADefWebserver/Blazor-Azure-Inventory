@@ -21,7 +21,9 @@
             </ChildContent>
             <Helper>
                 <RadzenText TextStyle="TextStyle.Caption" class="muted">
-                    @(Current.HasStoredKey ? $"Saved key ••••••••{Current.ApiKeyLast4}. Enter a new key to replace it." : ApiKeyHelpText)
+                    @(Current.HasStoredKey ? $"Saved key ••••••••{Current.ApiKeyLast4}. Enter a new key to replace it."
+                      : Current.UsesDefaultKey ? "Using the default key configured for this app. Enter a key only to use your own instead."
+                      : ApiKeyHelpText)
                 </RadzenText>
             </Helper>
         </RadzenFormField>
@@ -169,7 +171,9 @@
         string.IsNullOrWhiteSpace(Current.Endpoint) ? null
         : Guard.TryValidateFormat(Current.Endpoint, out _, out var error) ? null : error;
 
-    private string ApiKeyPlaceholder => Current.HasStoredKey ? $"••••••••{Current.ApiKeyLast4}" : _selectedServiceType switch
+    private string ApiKeyPlaceholder => Current.HasStoredKey ? $"••••••••{Current.ApiKeyLast4}"
+        : Current.UsesDefaultKey ? "Default key (optional)"
+        : _selectedServiceType switch
     {
         AIServiceType.OpenAI => "sk-...",
         AIServiceType.Anthropic => "sk-ant-...",
@@ -225,6 +229,8 @@
     private Task OnEndpointChangedAsync(string value)
     {
         Current.Endpoint = value ?? "";
+        // The default key only follows the configured default endpoint host.
+        Current.UsesDefaultKey = !Current.HasStoredKey && SettingsService.CanUseDefaultKey(Current);
         return ScheduleModelLoadAsync();
     }
 

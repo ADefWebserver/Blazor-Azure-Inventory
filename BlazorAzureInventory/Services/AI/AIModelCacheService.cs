@@ -16,7 +16,7 @@ public sealed class AIModelCacheService(SessionAISettingsService settings, IHttp
 
     public async Task<ModelListResult> GetModelsAsync(AIProviderSettings provider, bool forceRefresh, CancellationToken ct)
     {
-        var key = string.IsNullOrWhiteSpace(provider.ApiKey) ? await settings.GetApiKeyAsync(provider.ServiceType) : provider.ApiKey.Trim();
+        var key = string.IsNullOrWhiteSpace(provider.ApiKey) ? await settings.GetApiKeyAsync(provider) : provider.ApiKey.Trim();
         if (string.IsNullOrEmpty(key)) return new ModelListResult(ModelListStatus.Unauthorized, [], "Enter an API key to load models.");
 
         var cacheKey = $"{provider.ServiceType}|{provider.Endpoint}|{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)))}";

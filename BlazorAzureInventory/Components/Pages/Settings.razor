@@ -11,6 +11,10 @@
 
     <RadzenAlert AlertStyle="AlertStyle.Info" Shade="Shade.Lighter" AllowClose="false" Icon="shield">
         Your API key is kept only for this session, is encrypted in memory, and is never saved.
+        @if (SettingsService.DefaultServiceType is { } defaultType)
+        {
+            @($" A default {AIServiceTypes.ToDisplayName(defaultType)} provider is configured for this app, so entering your own key is optional.")
+        }
     </RadzenAlert>
 
     <RadzenCard class="rz-p-6">
