@@ -89,7 +89,7 @@ The suite covers the connection classifier (including the table in section 9.4 o
   - Reader-only users see `AccessDenied` badges, and the scan issues dialog names the exact missing role, the affected subscriptions, and the `az role assignment create` commands to fix it. The same table is on the setup page and under **Required Azure roles** on the home page.
   - **Tag Contributor** (optional) edits tags (`Microsoft.Resources/tags/write`). Without it, the Tags tab is read-only.
 - SCM sites reachable only through private endpoints cannot be read; app settings from ARM still work.
-- The Anthropic and Google AI adapters are text-only and use the grounding fallback instead of tool calling.
+- All providers (OpenAI, Azure OpenAI, Azure AI Foundry, Anthropic, and Google AI) use tool calling. Models without function calling (for example embeddings, TTS, realtime, or `o1-mini`) use the grounding fallback.
 - Azure OpenAI and Foundry deployment names cannot be listed with an API key, so they are entered manually.
 - Pin the Azure MCP Server image tag (`AZURE_MCP_TAG`) and verify tool names against that version before release.
 - vis-network is served from `wwwroot/lib/vis-network` (see `libman.json`) so the Content Security Policy needs no external script origins.
