@@ -41,6 +41,7 @@ public class Program
             .EnableTokenAcquisitionToCallDownstreamApi(armScopes)
             .AddInMemoryTokenCaches();
         builder.Services.AddTenantGuard();
+        builder.Services.AddTokenCacheSessionGuard(armScopes);
         builder.Services.AddTenantAccess();
         builder.Services.AddSingleton<SetupStatusService>();
 
