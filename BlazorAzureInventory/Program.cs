@@ -98,6 +98,11 @@ public class Program
         builder.Services.AddHttpClient(TagPermissionChecker.HttpClientName)
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
 
+        // Self-assignment of the required roles (only writes when the user clicks the button)
+        builder.Services.AddScoped<RoleSelfAssignmentService>();
+        builder.Services.AddHttpClient(RoleSelfAssignmentService.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
+
         // AI and MCP
         builder.Services.AddScoped<SessionAISettingsService>();
         builder.Services.AddScoped<AIModelCacheService>();

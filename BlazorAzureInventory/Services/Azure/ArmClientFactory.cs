@@ -19,6 +19,10 @@ public sealed class ArmClientFactory(ITokenAcquisition tokens, UserContextAccess
 
     public async Task<TokenCredential> GetCredentialAsync(string? tenantId = null) => (await GetEntryAsync(tenantId)).Credential;
 
+    /// <summary>An ARM access token for the signed-in user in <paramref name="tenantId"/>.</summary>
+    public async Task<AccessToken> GetTokenAsync(string? tenantId, CancellationToken ct) =>
+        await (await GetCredentialAsync(tenantId)).GetTokenAsync(new TokenRequestContext(_scopes), ct);
+
     private async Task<(ArmClient Client, TokenCredential Credential)> GetEntryAsync(string? tenantId)
     {
         var user = await userContext.GetUserAsync();

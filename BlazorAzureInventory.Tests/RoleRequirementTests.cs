@@ -1,5 +1,6 @@
 using BlazorAzureInventory.Components.Inventory;
 using BlazorAzureInventory.Models.Inventory;
+using BlazorAzureInventory.Services.Azure;
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
 using Radzen;
@@ -85,5 +86,44 @@ public class RoleRequirementTests : BunitContext
         var cut = Render<ScanIssuesDialog>(p => p.Add(x => x.Issues, issues));
 
         Assert.DoesNotContain("Missing Azure roles detected", cut.Markup);
+    }
+
+    // Permission payloads shaped like GET {scope}/providers/Microsoft.Authorization/permissions for built-in roles.
+    private const string ReaderPerms = """{"value":[{"actions":["*/read"],"notActions":[]}]}""";
+    private const string OwnerPerms = """{"value":[{"actions":["*"],"notActions":[]}]}""";
+    private const string ContributorPerms = """{"value":[{"actions":["*"],"notActions":["Microsoft.Authorization/*/Delete","Microsoft.Authorization/*/Write"]}]}""";
+    private const string UserAccessAdminPerms = """{"value":[{"actions":["*/read","Microsoft.Authorization/*","Microsoft.Support/*"],"notActions":[]}]}""";
+    private const string ReaderAndWebsitePerms = """{"value":[{"actions":["*/read"]},{"actions":["Microsoft.Web/sites/*","Microsoft.Web/serverFarms/join/action"]}]}""";
+
+    [Theory]
+    [InlineData(OwnerPerms, "", true)]
+    [InlineData(ContributorPerms, "", false)]
+    [InlineData(UserAccessAdminPerms, "Website Contributor,Tag Contributor", true)]
+    [InlineData(ReaderPerms, "Website Contributor,Tag Contributor", false)]
+    [InlineData(ReaderAndWebsitePerms, "Tag Contributor", false)]
+    [InlineData("""{"value":[]}""", "Reader,Website Contributor,Tag Contributor", false)]
+    public void Self_assignment_detects_missing_roles_and_assign_permission(string json, string expectedMissing, bool canAssign)
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+
+        Assert.Equal(expectedMissing.Split(',', StringSplitOptions.RemoveEmptyEntries), RoleSelfAssignmentService.MissingRoles(doc.RootElement));
+        Assert.Equal(canAssign, RoleSelfAssignmentService.CanAssign(doc.RootElement));
+    }
+
+    [Fact]
+    public void Self_assignment_has_a_definition_for_every_required_role()
+    {
+        Assert.All(AzureRoleRequirements.All, r => Assert.True(RoleSelfAssignmentService.RoleDefinitionIds.ContainsKey(r.Role), r.Role));
+    }
+
+    [Fact]
+    public void Self_assignment_reads_object_id_from_token()
+    {
+        static string Encode(string json) => Microsoft.IdentityModel.Tokens.Base64UrlEncoder.Encode(json);
+        var token = $"{Encode("""{"alg":"none","typ":"JWT"}""")}.{Encode("""{"oid":"33333333-3333-3333-3333-333333333333","tid":"t"}""")}.";
+        var noOid = $"{Encode("""{"alg":"none","typ":"JWT"}""")}.{Encode("""{"tid":"t"}""")}.";
+
+        Assert.Equal("33333333-3333-3333-3333-333333333333", RoleSelfAssignmentService.ObjectIdFromToken(token));
+        Assert.Null(RoleSelfAssignmentService.ObjectIdFromToken(noOid));
     }
 }

@@ -1,0 +1,163 @@
+@using BlazorAzureInventory.Services.Azure
+@inject AzureContextService AzureContextService
+@inject RoleSelfAssignmentService RoleAssignments
+@inject DialogService DialogService
+@inject NotificationService Notifications
+@inject Microsoft.Identity.Web.MicrosoftIdentityConsentAndConditionalAccessHandler ConsentHandler
+
+@* Lets an Owner / User Access Administrator assign the required roles to themselves. *@
+<RadzenStack Gap="0.5rem">
+    <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">
+        <strong>Assign them to yourself:</strong> if you are an Owner, User Access Administrator, or Role Based Access Control
+        Administrator on a subscription but don't hold these roles, the app can assign them to your account.
+    </RadzenText>
+
+    @if (_rows is null)
+    {
+        <div>
+            <RadzenButton Text="Check my roles" Icon="admin_panel_settings" ButtonStyle="ButtonStyle.Secondary"
+                          IsBusy="@_loading" BusyText="Checking..." Click="@LoadAsync" />
+        </div>
+    }
+    else if (_rows.Count == 0)
+    {
+        <RadzenText TextStyle="TextStyle.Body2" class="muted rz-m-0">No enabled subscriptions are visible to you.</RadzenText>
+    }
+    else
+    {
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+            <RadzenCheckBox @bind-Value="_includeTags" Name="includeTagContributor" />
+            <RadzenLabel Text="Include Tag Contributor (optional, to edit tags)" Component="includeTagContributor" />
+        </RadzenStack>
+        <table class="roles-table">
+            <thead>
+                <tr><th>Subscription</th><th>Missing roles</th><th></th></tr>
+            </thead>
+            <tbody>
+                @foreach (var row in _rows)
+                {
+                    var missing = Missing(row);
+                    <tr>
+                        <td>@row.Subscription.DisplayName <span class="mono muted">(@row.Subscription.SubscriptionId)</span></td>
+                        <td>
+                            @if (row.Error is not null)
+                            {
+                                <span class="muted">Could not check: @row.Error</span>
+                            }
+                            else if (missing.Count == 0)
+                            {
+                                <RadzenBadge Text="None" BadgeStyle="BadgeStyle.Success" Shade="Shade.Lighter" />
+                            }
+                            else
+                            {
+                                <strong>@string.Join(", ", missing)</strong>
+                            }
+                        </td>
+                        <td>
+                            @if (row.Error is null && missing.Count > 0)
+                            {
+                                @if (row.CanAssign)
+                                {
+                                    <RadzenButton Text="Assign to me" Icon="person_add" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Primary"
+                                                  Disabled="@_busy" Click="@(() => AssignAsync([row]))" />
+                                }
+                                else
+                                {
+                                    <span class="muted">Ask an Owner to assign</span>
+                                }
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" Wrap="FlexWrap.Wrap">
+            @if (Assignable.Count > 1)
+            {
+                <RadzenButton Text="@($"Assign all to me ({Assignable.Count} subscriptions)")" Icon="group_add" ButtonStyle="ButtonStyle.Primary"
+                              IsBusy="@_busy" BusyText="Assigning..." Click="@(() => AssignAsync(Assignable))" />
+            }
+            <RadzenButton Text="Refresh" Icon="refresh" ButtonStyle="ButtonStyle.Light" Disabled="@_busy"
+                          IsBusy="@_loading" BusyText="Checking..." Click="@LoadAsync" />
+        </RadzenStack>
+        <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">
+            Checked at subscription scope. New assignments can take a few minutes to take effect; rescan afterwards.
+        </RadzenText>
+    }
+</RadzenStack>
+
+@code {
+    private List<SubscriptionRoleStatus>? _rows;
+    private bool _includeTags;
+    private bool _loading;
+    private bool _busy;
+
+    private IReadOnlyList<string> Missing(SubscriptionRoleStatus row) =>
+        row.MissingRoles.Where(r => _includeTags || r != AzureRoleRequirements.TagContributor).ToList();
+
+    private List<SubscriptionRoleStatus> Assignable =>
+        _rows?.Where(r => r.Error is null && r.CanAssign && Missing(r).Count > 0).ToList() ?? [];
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var context = await AzureContextService.GetContextAsync();
+            var enabled = context.Subscriptions.Where(s => s.State == "Enabled").ToList();
+            _rows = [.. await Task.WhenAll(enabled.Select(s => RoleAssignments.GetStatusAsync(s, CancellationToken.None)))];
+        }
+        catch (Exception ex)
+        {
+            ConsentHandler.HandleException(ex);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task AssignAsync(IReadOnlyList<SubscriptionRoleStatus> rows)
+    {
+        var plan = rows.Select(r => (Row: r, Roles: Missing(r))).Where(p => p.Roles.Count > 0).ToList();
+        if (plan.Count == 0) return;
+
+        var summary = string.Join("; ", plan.Select(p => $"{string.Join(", ", p.Roles)} on {p.Row.Subscription.DisplayName}"));
+        if (await DialogService.Confirm($"Assign {summary} to your account?", "Assign Azure roles",
+                new ConfirmOptions { OkButtonText = "Assign", CancelButtonText = "Cancel" }) != true)
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var failures = new List<string>();
+            var assigned = 0;
+            foreach (var (row, roles) in plan)
+            {
+                foreach (var result in await RoleAssignments.AssignToMeAsync(row.Subscription, roles, CancellationToken.None))
+                {
+                    if (result.Succeeded) assigned++;
+                    else failures.Add($"{result.Role} on {row.Subscription.DisplayName}: {result.Error}");
+                }
+            }
+
+            if (assigned > 0)
+            {
+                Notifications.Notify(NotificationSeverity.Success, "Roles assigned",
+                    $"{assigned} role assignment{(assigned == 1 ? "" : "s")} created. Allow a few minutes, then rescan.", 10000);
+            }
+            if (failures.Count > 0)
+            {
+                Notifications.Notify(NotificationSeverity.Error, "Some roles could not be assigned", string.Join(Environment.NewLine, failures), 20000);
+            }
+
+            _rows = [.. await Task.WhenAll(_rows!.Select(r => RoleAssignments.GetStatusAsync(r.Subscription, CancellationToken.None)))];
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}
