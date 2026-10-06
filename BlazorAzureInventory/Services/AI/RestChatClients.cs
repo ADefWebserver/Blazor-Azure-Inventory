@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -11,10 +13,12 @@ namespace BlazorAzureInventory.Services.AI;
 /// <summary><see cref="IChatClient"/> over the Anthropic Messages REST API (Anthropic or Foundry), including tool calling.</summary>
 public sealed class AnthropicChatClient(HttpClient http, Uri messagesUri, string apiKey, string model, int defaultMaxTokens) : IChatClient
 {
+    // Newer Claude models reject sampling parameters such as temperature with a 400; remember them to avoid a retry per call.
+    private static readonly ConcurrentDictionary<string, byte> ModelsRejectingTemperature = new(StringComparer.OrdinalIgnoreCase);
+
     public async Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
     {
-        using var request = CreateRequest(messages, options, stream: false);
-        using var response = await http.SendAsync(request, cancellationToken);
+        using var response = await SendAsync(messages, options, stream: false, cancellationToken);
         await RestChatHelpers.EnsureSuccessAsync(response, "Anthropic", cancellationToken);
 
         using var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
@@ -52,8 +56,7 @@ public sealed class AnthropicChatClient(HttpClient http, Uri messagesUri, string
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IEnumerable<ChatMessage> messages, ChatOptions? options = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        using var request = CreateRequest(messages, options, stream: true);
-        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        using var response = await SendAsync(messages, options, stream: true, cancellationToken);
         await RestChatHelpers.EnsureSuccessAsync(response, "Anthropic", cancellationToken);
 
         string? messageId = null;
@@ -124,9 +127,46 @@ public sealed class AnthropicChatClient(HttpClient http, Uri messagesUri, string
 
     public void Dispose() { }
 
-    private HttpRequestMessage CreateRequest(IEnumerable<ChatMessage> messages, ChatOptions? options, bool stream)
+    /// <summary>Sends the request, retrying once without temperature if the model rejects that parameter.</summary>
+    private async Task<HttpResponseMessage> SendAsync(IEnumerable<ChatMessage> messages, ChatOptions? options, bool stream, CancellationToken ct)
     {
         var list = messages.ToList();
+        var requestModel = options?.ModelId ?? model;
+        var completion = stream ? HttpCompletionOption.ResponseHeadersRead : HttpCompletionOption.ResponseContentRead;
+        var sendTemperature = options?.Temperature is not null && !ModelsRejectingTemperature.ContainsKey(requestModel);
+
+        using (var request = CreateRequest(list, options, stream, sendTemperature))
+        {
+            var response = await http.SendAsync(request, completion, ct);
+            if (!sendTemperature || response.StatusCode != HttpStatusCode.BadRequest) return response;
+
+            if (!IsTemperatureRejection(await response.Content.ReadAsStringAsync(ct))) return response;
+            response.Dispose();
+            ModelsRejectingTemperature.TryAdd(requestModel, 0);
+        }
+
+        using var retry = CreateRequest(list, options, stream, sendTemperature: false);
+        return await http.SendAsync(retry, completion, ct);
+    }
+
+    private static bool IsTemperatureRejection(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            return doc.RootElement.TryGetProperty("error", out var error)
+                && GetString(error, "type") == "invalid_request_error"
+                && GetString(error, "message") is { } message
+                && message.Contains("temperature", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private HttpRequestMessage CreateRequest(List<ChatMessage> list, ChatOptions? options, bool stream, bool sendTemperature)
+    {
         var system = string.Join("\n\n", list.Where(m => m.Role == ChatRole.System).Select(m => m.Text));
 
         var body = new JsonObject
@@ -137,7 +177,7 @@ public sealed class AnthropicChatClient(HttpClient http, Uri messagesUri, string
             ["stream"] = stream
         };
         if (system.Length > 0) body["system"] = system;
-        if (options?.Temperature is { } temperature) body["temperature"] = temperature;
+        if (sendTemperature && options?.Temperature is { } temperature) body["temperature"] = temperature;
 
         var tools = options?.ToolMode is NoneChatToolMode ? [] : options?.Tools?.OfType<AIFunctionDeclaration>().ToList() ?? [];
         if (tools.Count > 0)

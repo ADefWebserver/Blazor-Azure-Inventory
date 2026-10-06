@@ -103,6 +103,47 @@ public class AnthropicChatClientTests
         Assert.Null(handler.Bodies[0]["tools"]);
     }
 
+    [Fact]
+    public async Task Temperature_is_dropped_and_remembered_when_model_rejects_it()
+    {
+        const string model = "claude-test-no-temperature";
+        var handler = new FakeAIHandler(
+            new HttpResponseMessage(HttpStatusCode.BadRequest)
+            {
+                Content = new StringContent("""{"type":"error","error":{"type":"invalid_request_error","message":"`temperature` is deprecated for this model."}}""")
+            },
+            Json("""{"id":"msg_1","stop_reason":"end_turn","content":[{"type":"text","text":"ok"}]}"""),
+            Json("""{"id":"msg_2","stop_reason":"end_turn","content":[{"type":"text","text":"again"}]}"""));
+        using var client = new AnthropicChatClient(new HttpClient(handler), MessagesUri, "key", model, 256);
+        var options = new ChatOptions { Temperature = 0.2f };
+
+        var first = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], options);
+        var second = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], options);
+
+        Assert.Equal("ok", first.Text);
+        Assert.Equal("again", second.Text);
+        Assert.Equal(3, handler.Bodies.Count);
+        Assert.NotNull(handler.Bodies[0]["temperature"]);
+        Assert.Null(handler.Bodies[1]["temperature"]);
+        Assert.Null(handler.Bodies[2]["temperature"]);
+    }
+
+    [Fact]
+    public async Task Other_bad_requests_are_not_retried()
+    {
+        var handler = new FakeAIHandler(new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = new StringContent("""{"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: too large"}}""")
+        });
+        using var client = new AnthropicChatClient(new HttpClient(handler), MessagesUri, "key", "claude-test-other-400", 256);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() =>
+            client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], new ChatOptions { Temperature = 0.2f }));
+
+        Assert.Equal(HttpStatusCode.BadRequest, ex.StatusCode);
+        Assert.Single(handler.Bodies);
+    }
+
     private static HttpResponseMessage Sse(params string[] events) => FakeAIHandler.Sse(events);
 
     private static HttpResponseMessage Json(string json) => FakeAIHandler.Json(json);
