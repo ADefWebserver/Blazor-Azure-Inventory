@@ -1,0 +1,174 @@
+@using BlazorAzureInventory.Services.Auth
+@using BlazorAzureInventory.Services.Azure
+@inject DirectoryUserLookup Directory
+@inject RoleSelfAssignmentService RoleAssignments
+@inject DialogService DialogService
+@inject NotificationService Notifications
+@inject NavigationManager Nav
+
+@* Lets an Owner / User Access Administrator assign the required roles to another user. *@
+<RadzenStack Gap="0.5rem">
+    <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">
+        <strong>Grant them to another user:</strong> you can assign roles on the subscriptions below. Enter the user's email address,
+        user principal name, or object ID. The first lookup in each directory asks you to consent to reading basic user profiles
+        (Microsoft Graph <code>@UserReadScopeName</code>).
+    </RadzenText>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="1rem" Wrap="FlexWrap.Wrap" AlignItems="AlignItems.End">
+        <RadzenStack Gap="0.25rem">
+            <RadzenLabel Text="User" Component="grantRolesUser" />
+            <RadzenTextBox @bind-Value="_identifier" Immediate="true" Name="grantRolesUser" Placeholder="user@contoso.com"
+                           MaxLength="256" Style="width: 280px;" />
+        </RadzenStack>
+        <RadzenStack Gap="0.25rem">
+            <RadzenLabel Text="Subscriptions" Component="grantRolesSubscriptions" />
+            <RadzenDropDown TValue="IEnumerable<string>" @bind-Value="_subscriptionIds" Data="Subscriptions" Name="grantRolesSubscriptions"
+                            TextProperty="@nameof(SubscriptionInfo.DisplayName)" ValueProperty="@nameof(SubscriptionInfo.SubscriptionId)"
+                            Multiple="true" Chips="true" AllowClear="true" Placeholder="Select subscriptions" Style="min-width: 280px;" />
+        </RadzenStack>
+    </RadzenStack>
+    <RadzenCheckBoxList TValue="string" @bind-Value="_roles" Data="RoleOptions" TextProperty="@nameof(RoleOption.Text)"
+                        ValueProperty="@nameof(RoleOption.Role)" Orientation="Orientation.Horizontal" />
+    <div>
+        <RadzenButton Text="Grant roles" Icon="person_add" ButtonStyle="ButtonStyle.Primary" Disabled="@(!CanGrant)"
+                      IsBusy="@_busy" BusyText="Granting..." Click="@GrantAsync" />
+    </div>
+</RadzenStack>
+
+@code {
+    /// <summary>Subscriptions on which the signed-in user may write role assignments.</summary>
+    [Parameter, EditorRequired] public IReadOnlyList<SubscriptionInfo> Subscriptions { get; set; } = [];
+
+    private const string UserReadScopeName = "User.ReadBasic.All";
+
+    private static readonly IReadOnlyList<RoleOption> RoleOptions =
+    [
+        new(AzureRoleRequirements.Reader, AzureRoleRequirements.Reader),
+        new(AzureRoleRequirements.WebsiteContributor, AzureRoleRequirements.WebsiteContributor),
+        new(AzureRoleRequirements.TagContributor, $"{AzureRoleRequirements.TagContributor} (optional, to edit tags)"),
+    ];
+
+    private string? _identifier;
+    private IEnumerable<string> _subscriptionIds = [];
+    private IEnumerable<string> _roles = [AzureRoleRequirements.Reader, AzureRoleRequirements.WebsiteContributor];
+    private bool _busy;
+
+    private bool CanGrant => !_busy && DirectoryUserLookup.Normalize(_identifier) is not null && SelectedSubscriptions.Count > 0 && SelectedRoles.Count > 0;
+
+    private List<SubscriptionInfo> SelectedSubscriptions =>
+        Subscriptions.Where(s => _subscriptionIds.Contains(s.SubscriptionId, StringComparer.OrdinalIgnoreCase)).ToList();
+
+    private List<string> SelectedRoles => RoleOptions.Select(r => r.Role).Where(r => _roles.Contains(r)).ToList();
+
+    protected override void OnParametersSet()
+    {
+        _subscriptionIds = _subscriptionIds.Where(id => Subscriptions.Any(s => s.SubscriptionId.Equals(id, StringComparison.OrdinalIgnoreCase))).ToList();
+        if (!_subscriptionIds.Any() && Subscriptions.Count == 1) _subscriptionIds = [Subscriptions[0].SubscriptionId];
+    }
+
+    private async Task GrantAsync()
+    {
+        if (!CanGrant) return;
+        var identifier = DirectoryUserLookup.Normalize(_identifier)!;
+        var subscriptions = SelectedSubscriptions;
+        var roles = SelectedRoles;
+
+        _busy = true;
+        try
+        {
+            // Object IDs are per directory, so resolve the user in each subscription's tenant.
+            var users = new Dictionary<string, DirectoryUser>(StringComparer.OrdinalIgnoreCase);
+            foreach (var tenantId in subscriptions.Select(s => s.TenantId).Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                DirectoryUser? user;
+                try
+                {
+                    user = await Directory.FindAsync(tenantId, identifier, CancellationToken.None);
+                }
+                catch (Exception ex) when (ScanErrors.IsConsentRequired(ex))
+                {
+                    await RequestConsentAsync(tenantId, ex);
+                    return;
+                }
+                if (user is not null) users[tenantId] = user;
+            }
+
+            var found = subscriptions.Where(s => users.ContainsKey(s.TenantId)).ToList();
+            var missing = subscriptions.Except(found).ToList();
+            if (found.Count == 0)
+            {
+                Notifications.Notify(NotificationSeverity.Warning, "User not found",
+                    $"No user matching '{identifier}' was found in the directory of the selected subscriptions.", 10000);
+                return;
+            }
+
+            var who = string.Join(" / ", users.Values.Select(u => u.Label).Distinct());
+            var message = $"Assign {string.Join(", ", roles)} to {who} on {string.Join(", ", found.Select(s => s.DisplayName))}?";
+            if (missing.Count > 0)
+            {
+                message += $" The user was not found in the directory of {string.Join(", ", missing.Select(s => s.DisplayName))}, so those are skipped.";
+            }
+            if (await DialogService.Confirm(message, "Grant Azure roles",
+                    new ConfirmOptions { OkButtonText = "Grant", CancelButtonText = "Cancel" }) != true)
+            {
+                return;
+            }
+
+            var failures = new List<string>();
+            int assigned = 0, existing = 0;
+            foreach (var subscription in found)
+            {
+                foreach (var result in await RoleAssignments.AssignToUserAsync(subscription, roles, users[subscription.TenantId].ObjectId, CancellationToken.None))
+                {
+                    if (!result.Succeeded) failures.Add($"{result.Role} on {subscription.DisplayName}: {result.Error}");
+                    else if (result.AlreadyAssigned) existing++;
+                    else assigned++;
+                }
+            }
+
+            if (assigned + existing > 0)
+            {
+                var detail = $"{assigned} role assignment{(assigned == 1 ? "" : "s")} created for {who}";
+                if (existing > 0) detail += $", {existing} already existed";
+                Notifications.Notify(NotificationSeverity.Success, "Roles granted",
+                    $"{detail}. They take a few minutes to apply; the user should then sign out and in again.", 15000);
+            }
+            if (failures.Count > 0)
+            {
+                Notifications.Notify(NotificationSeverity.Error, "Some roles could not be granted", string.Join(Environment.NewLine, failures), 20000);
+            }
+        }
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or ArgumentException)
+        {
+            Notifications.Notify(NotificationSeverity.Error, "Could not look up the user", ex.Message, 15000);
+        }
+        catch (Exception ex)
+        {
+            Notifications.Notify(NotificationSeverity.Error, "Could not look up the user", ex.GetType().Name, 15000);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RequestConsentAsync(string tenantId, Exception ex)
+    {
+        var tenant = Subscriptions.FirstOrDefault(s => s.TenantId.Equals(tenantId, StringComparison.OrdinalIgnoreCase));
+        if (await DialogService.Confirm(
+                $"Looking up users needs your consent to read basic user profiles ({UserReadScopeName}) in the directory of " +
+                $"{tenant?.DisplayName ?? tenantId}. You will be sent to Microsoft to approve it, then returned here to try again.",
+                "Consent required", new ConfirmOptions { OkButtonText = "Continue", CancelButtonText = "Cancel" }) != true)
+        {
+            return;
+        }
+
+        string? claims = null;
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            if (e is Microsoft.Identity.Client.MsalServiceException { Claims: { Length: > 0 } c }) { claims = c; break; }
+        }
+        Nav.NavigateTo(TenantAccess.BuildUrl(tenantId, "/" + Nav.ToBaseRelativePath(Nav.Uri), claims, DirectoryUserLookup.Scopes), forceLoad: true);
+    }
+
+    private sealed record RoleOption(string Role, string Text);
+}

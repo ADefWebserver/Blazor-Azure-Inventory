@@ -18,7 +18,7 @@ See [Docs/implementation-plan.md](Docs/implementation-plan.md) for the full desi
 
 - **User identity drives every Azure call.** ARM, Resource Graph, and Kudu calls use the signed-in user's delegated token. The app never reads customer resources with its own identity.
 - **Secrets are never stored or shown.** `ConfigEntry` has no value property; only identifiers (hosts, database, account, container, vault, and secret names) leave the analysis layer. Values render as `••••••`.
-- **Read-only, except for tags you approve.** The only write is to Azure tags (`Microsoft.Resources/tags`), made with the signed-in user's token after the user reviews a diff and clicks Save or Apply. The MCP server runs with `--read-only` and an allowlist that is enforced on both the server and the client.
+- **Read-only, except for tags and role assignments you approve.** The only writes are Azure tags (`Microsoft.Resources/tags`), made with the signed-in user's token after the user reviews a diff and clicks Save or Apply, and the required role assignments, made only after the user confirms them under **Required Azure roles**. The MCP server runs with `--read-only` and an allowlist that is enforced on both the server and the client.
 - **Resource properties popup and tags.** Click any resource name (Inventory grids, Graph nodes and edge endpoints, the App Configuration header, or resource links in chat) to see all its properties, connections, and tags. The **Tags** tab edits tags with validation, a diff preview, and conflict detection. **Tag connections...** on the Inventory page, or the AI chat, proposes `conn-out-<Type>` / `conn-in-<Type>` tags that list what each resource connects to. The AI can only propose tag changes; it cannot apply them. See [Docs/tags-feature-plan.md](Docs/tags-feature-plan.md).
 - **In-memory, per-user sessions.** Snapshots, graphs, and encrypted AI keys live in a bounded in-memory cache keyed by tenant and object ID, and are cleared on sign-out.
 
@@ -27,7 +27,7 @@ See [Docs/implementation-plan.md](Docs/implementation-plan.md) for the full desi
 - .NET SDK 10
 - Docker (only to run the Azure MCP Server container locally through Aspire)
 - Two multi-tenant Entra ID app registrations (see section 6.1 of the plan):
-  - `azinventory-web`: redirect URI `https://localhost:7113/signin-oidc` (and your App Service URL), front-channel logout `/signout-oidc`, delegated permissions `User.Read` and Azure Service Management `user_impersonation`, plus the MCP scope.
+  - `azinventory-web`: redirect URI `https://localhost:7113/signin-oidc` (and your App Service URL), front-channel logout `/signout-oidc`, delegated permissions `User.Read` and Azure Service Management `user_impersonation`, plus the MCP scope. Optionally add Microsoft Graph `User.ReadBasic.All` (requested on first use otherwise) so Owners can grant the required roles to other users from the app.
   - `azinventory-mcp`: exposes a delegated scope such as `Mcp.Tools.Read`, lists `azinventory-web` in `knownClientApplications`, and is allowed to call ARM on behalf of the user.
 
 ## Configuration
@@ -89,6 +89,7 @@ The suite covers the connection classifier (including the table in section 9.4 o
   - Reader-only users see `AccessDenied` badges, and the scan issues dialog names the exact missing role, the affected subscriptions, and the `az role assignment create` commands to fix it. The same table is on the setup page and under **Required Azure roles** on the home page.
   - **Tag Contributor** (optional) edits tags (`Microsoft.Resources/tags/write`). Without it, the Tags tab is read-only.
   - Users who can write role assignments (Owner, User Access Administrator, or Role Based Access Control Administrator) but lack these roles can click **Check my roles** under **Required Azure roles** on the home page, then **Assign to me** to assign the missing roles to their own account at subscription scope (after a confirmation prompt). Assignments can take a few minutes to take effect.
+  - Those users can also **grant the roles to another user** from the same section: enter the user's email address, user principal name, or object ID, pick subscriptions and roles, and confirm. The user is looked up in each subscription's directory through Microsoft Graph with the delegated `User.ReadBasic.All` permission, which the app requests (incremental consent) the first time. The role check and **Check my roles** always reflect the account signed in to the app, which may differ from the account the Azure CLI uses.
 - SCM sites reachable only through private endpoints cannot be read; app settings from ARM still work.
 - All providers (OpenAI, Azure OpenAI, Azure AI Foundry, Anthropic, and Google AI) use tool calling. Models without function calling (for example embeddings, TTS, realtime, or `o1-mini`) use the grounding fallback.
 - Azure OpenAI and Foundry deployment names cannot be listed with an API key, so they are entered manually.

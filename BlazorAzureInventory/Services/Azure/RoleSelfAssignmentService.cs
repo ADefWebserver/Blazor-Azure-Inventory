@@ -11,11 +11,11 @@ namespace BlazorAzureInventory.Services.Azure;
 /// <summary>Which of the app's roles the signed-in user lacks on a subscription, and whether they can assign them.</summary>
 public sealed record SubscriptionRoleStatus(SubscriptionInfo Subscription, IReadOnlyList<string> MissingRoles, bool CanAssign, string? Error = null);
 
-public sealed record RoleAssignmentResult(string Role, bool Succeeded, string? Error = null);
+public sealed record RoleAssignmentResult(string Role, bool Succeeded, string? Error = null, bool AlreadyAssigned = false);
 
 /// <summary>
 /// Lets a user who may write role assignments (Owner, User Access Administrator, or Role Based Access Control Administrator)
-/// assign the app's required roles to themselves at subscription scope. Permission checks are advisory; ARM is the authority.
+/// assign the app's required roles to themselves or to another user at subscription scope. Permission checks are advisory; ARM is the authority.
 /// </summary>
 public sealed class RoleSelfAssignmentService(
     ArmClientFactory armFactory,
@@ -63,7 +63,6 @@ public sealed class RoleSelfAssignmentService(
     /// <summary>Assigns each role to the signed-in user at subscription scope. An existing assignment counts as success.</summary>
     public async Task<IReadOnlyList<RoleAssignmentResult>> AssignToMeAsync(SubscriptionInfo subscription, IEnumerable<string> roles, CancellationToken ct)
     {
-        var results = new List<RoleAssignmentResult>();
         string token, principalId;
         try
         {
@@ -75,8 +74,48 @@ public sealed class RoleSelfAssignmentService(
         {
             return roles.Select(r => new RoleAssignmentResult(r, false, Describe(ex))).ToList();
         }
+        return await AssignLoggedAsync(token, subscription, roles, principalId, ct);
+    }
 
-        var client = httpFactory.CreateClient(HttpClientName);
+    /// <summary>
+    /// Assigns each role to another user (by object ID in the subscription's tenant) at subscription scope.
+    /// Requires the signed-in user to hold <see cref="RoleAssignmentWriteAction"/>; ARM enforces it.
+    /// </summary>
+    public async Task<IReadOnlyList<RoleAssignmentResult>> AssignToUserAsync(SubscriptionInfo subscription, IEnumerable<string> roles, string principalId, CancellationToken ct)
+    {
+        string token;
+        try
+        {
+            token = (await armFactory.GetTokenAsync(subscription.TenantId, ct)).Token;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            return roles.Select(r => new RoleAssignmentResult(r, false, Describe(ex))).ToList();
+        }
+        return await AssignLoggedAsync(token, subscription, roles, principalId, ct);
+    }
+
+    private async Task<IReadOnlyList<RoleAssignmentResult>> AssignLoggedAsync(
+        string token, SubscriptionInfo subscription, IEnumerable<string> roles, string principalId, CancellationToken ct)
+    {
+        var results = await AssignAsync(httpFactory.CreateClient(HttpClientName), token, subscription, roles, principalId, ct);
+        foreach (var r in results.Where(r => r.Succeeded && !r.AlreadyAssigned))
+        {
+            logger.LogInformation("Assigned {Role} to {ObjectId} on subscription {SubscriptionId}", r.Role, principalId, subscription.SubscriptionId);
+        }
+        return results;
+    }
+
+    /// <summary>Creates the role assignments with <paramref name="token"/>. An existing assignment counts as success.</summary>
+    public static async Task<IReadOnlyList<RoleAssignmentResult>> AssignAsync(
+        HttpClient client, string token, SubscriptionInfo subscription, IEnumerable<string> roles, string principalId, CancellationToken ct)
+    {
+        if (!Guid.TryParse(principalId, out var principal))
+        {
+            return roles.Select(r => new RoleAssignmentResult(r, false, "Invalid principal ID.")).ToList();
+        }
+
+        var results = new List<RoleAssignmentResult>();
         foreach (var role in roles)
         {
             if (!RoleDefinitionIds.TryGetValue(role, out var definitionId))
@@ -96,7 +135,7 @@ public sealed class RoleSelfAssignmentService(
                         properties = new
                         {
                             roleDefinitionId = $"{scope}/providers/Microsoft.Authorization/roleDefinitions/{definitionId}",
-                            principalId,
+                            principalId = principal.ToString(),
                             principalType = "User"
                         }
                     })
@@ -104,10 +143,13 @@ public sealed class RoleSelfAssignmentService(
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
                 using var response = await client.SendAsync(request, ct);
                 var errorCode = response.IsSuccessStatusCode ? null : await ErrorCodeAsync(response, ct);
-                if (response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.Conflict && errorCode == "RoleAssignmentExists")
+                if (response.IsSuccessStatusCode)
                 {
-                    logger.LogInformation("Assigned {Role} to {ObjectId} on subscription {SubscriptionId}", role, principalId, subscription.SubscriptionId);
                     results.Add(new RoleAssignmentResult(role, true));
+                }
+                else if (response.StatusCode == HttpStatusCode.Conflict && errorCode == "RoleAssignmentExists")
+                {
+                    results.Add(new RoleAssignmentResult(role, true, AlreadyAssigned: true));
                 }
                 else
                 {

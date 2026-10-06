@@ -55,7 +55,8 @@
                     <li>
                         Open <strong>API permissions</strong> &gt; <strong>+ Add a permission</strong> &gt; <strong>Azure Service Management</strong> &gt;
                         <strong>Delegated permissions</strong>, check <code>user_impersonation</code>, and select <strong>Add permissions</strong>.
-                        Microsoft Graph <code>User.Read</code> is already listed.
+                        Microsoft Graph <code>User.Read</code> is already listed. Optionally also add Microsoft Graph <strong>Delegated</strong>
+                        <code>User.ReadBasic.All</code> so Owners can grant the required roles to other users from the app (it is otherwise requested on first use).
                     </li>
                     <li>
                         Save the client ID:

@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.Extensions.Options;
 using Microsoft.Identity.Web;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 
 namespace BlazorAzureInventory.Services.Auth;
 
@@ -9,6 +11,7 @@ namespace BlazorAzureInventory.Services.Auth;
 /// requirement (AADSTS65001 / AADSTS50076). The default challenge targets the configured multi-tenant authority,
 /// which resolves to the user's home tenant and therefore never clears the other tenant's requirement.
 /// The resulting tokens are cached under the same account; the callback does not sign in, so the existing session is kept.
+/// It can also request incremental consent for <see cref="AllowedExtraScopes"/> in that tenant.
 /// </summary>
 public static class TenantAccess
 {
@@ -21,11 +24,23 @@ public static class TenantAccess
     public static bool IsTenantAccess(AuthenticationProperties? properties) =>
         properties?.Items.ContainsKey(TenantItem) == true;
 
-    public static string BuildUrl(string tenantId, string returnUrl, string? claims = null)
+    public static string BuildUrl(string tenantId, string returnUrl, string? claims = null, IEnumerable<string>? scopes = null)
     {
         var url = $"{Path.TrimStart('/')}?tenantId={Uri.EscapeDataString(tenantId)}&returnUrl={Uri.EscapeDataString(returnUrl)}";
-        return string.IsNullOrEmpty(claims) ? url : $"{url}&claims={Uri.EscapeDataString(claims)}";
+        if (!string.IsNullOrEmpty(claims)) url += $"&claims={Uri.EscapeDataString(claims)}";
+        if (scopes?.Any() == true) url += $"&scope={Uri.EscapeDataString(string.Join(' ', scopes))}";
+        return url;
     }
+
+    /// <summary>Additional scopes a tenant-access request may ask the user to consent to.</summary>
+    public static IReadOnlyList<string> AllowedExtraScopes { get; } = [Azure.DirectoryUserLookup.Scope];
+
+    /// <summary>The requested scopes that are in <see cref="AllowedExtraScopes"/>; anything else is ignored.</summary>
+    public static IReadOnlyList<string> FilterScopes(string? scope) =>
+        (scope ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Where(s => AllowedExtraScopes.Contains(s, StringComparer.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
     public static IServiceCollection AddTenantAccess(this IServiceCollection services)
     {
@@ -83,7 +98,7 @@ public static class TenantAccess
         return services;
     }
 
-    public static IResult HandleAsync(HttpContext context, string tenantId, string? returnUrl, string? claims)
+    public static IResult HandleAsync(HttpContext context, string tenantId, string? returnUrl, string? claims, string? scope)
     {
         if (!Guid.TryParse(tenantId, out var tenant)) return Results.BadRequest();
         if (string.IsNullOrEmpty(returnUrl) || !returnUrl.StartsWith('/') || returnUrl.StartsWith("//") || returnUrl.StartsWith("/\\"))
@@ -96,6 +111,12 @@ public static class TenantAccess
         var loginHint = context.User.GetLoginHint() ?? context.User.FindFirst("preferred_username")?.Value;
         if (!string.IsNullOrEmpty(loginHint)) properties.Items[LoginHintItem] = loginHint;
         if (!string.IsNullOrEmpty(claims)) properties.Items[ClaimsItem] = claims;
+        if (FilterScopes(scope) is { Count: > 0 } extra)
+        {
+            // Replaces the configured scopes for this request only, so keep them and add the incremental-consent scopes.
+            var oidc = context.RequestServices.GetRequiredService<IOptionsMonitor<OpenIdConnectOptions>>().Get(OpenIdConnectDefaults.AuthenticationScheme);
+            properties.SetParameter<ICollection<string>>(OpenIdConnectParameterNames.Scope, oidc.Scope.Union(extra, StringComparer.OrdinalIgnoreCase).ToList());
+        }
 
         return Results.Challenge(properties, [OpenIdConnectDefaults.AuthenticationScheme]);
     }

@@ -10,6 +10,10 @@
     <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">
         <strong>Assign them to yourself:</strong> if you are an Owner, User Access Administrator, or Role Based Access Control
         Administrator on a subscription but don't hold these roles, the app can assign them to your account.
+        @if (!string.IsNullOrEmpty(_account))
+        {
+            <text>Roles are checked for <strong>@_account</strong>, the account signed in to this app (it may differ from the one the Azure CLI uses).</text>
+        }
     </RadzenText>
 
     @if (_rows is null)
@@ -63,7 +67,7 @@
                                 }
                                 else
                                 {
-                                    <span class="muted">Ask an Owner to assign</span>
+                                    <span class="muted" title="Your account can't create role assignments on this subscription. An Owner can grant them from this page or with the Azure CLI commands above.">Ask an Owner to assign</span>
                                 }
                             }
                         </td>
@@ -83,14 +87,37 @@
         <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">
             Checked at subscription scope. New assignments can take a few minutes to take effect; rescan afterwards.
         </RadzenText>
+        @if (Grantable.Count > 0)
+        {
+            <div class="rz-mt-2"><GrantRolesToUser Subscriptions="Grantable" /></div>
+        }
+        else if (_rows.Any(r => r.Error is null && !r.CanAssign && Missing(r).Count > 0))
+        {
+            <RadzenText TextStyle="TextStyle.Body2" class="muted rz-m-0">
+                Your account can't create role assignments on these subscriptions. Ask an Owner to sign in to this app and use
+                <strong>Grant them to another user</strong> under <strong>Check my roles</strong>, or to run the Azure CLI commands above.
+            </RadzenText>
+        }
     }
 </RadzenStack>
 
 @code {
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+
+    private string? _account;
     private List<SubscriptionRoleStatus>? _rows;
     private bool _includeTags;
     private bool _loading;
     private bool _busy;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var user = AuthState is null ? null : (await AuthState).User;
+        _account = user?.FindFirst("preferred_username")?.Value ?? user?.Identity?.Name;
+    }
+
+    private IReadOnlyList<SubscriptionInfo> Grantable =>
+        _rows?.Where(r => r.Error is null && r.CanAssign).Select(r => r.Subscription).ToList() ?? [];
 
     private IReadOnlyList<string> Missing(SubscriptionRoleStatus row) =>
         row.MissingRoles.Where(r => _includeTags || r != AzureRoleRequirements.TagContributor).ToList();

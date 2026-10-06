@@ -24,8 +24,13 @@ const NODE_STYLES = {
 
 const LABEL_INSIDE = new Set(['box', 'ellipse', 'database', 'circle', 'text']);
 const STRUCTURAL = new Set(['CONTAINS', 'HAS_SLOT', 'HOSTS_DATABASE', 'HAS_CONTAINER']);
+// Node types that have no properties popup.
+const NO_DETAILS = new Set(['Tenant']);
+const INFO_ICON_RADIUS = 8;
+const INFO_ICON_MIN_SCALE = 0.35;
 
 let network = null;
+let container = null;
 let nodes = null;
 let edges = null;
 let dotNet = null;
@@ -35,10 +40,16 @@ let lastFilter = null;
 
 export function init(containerId, dotNetRef) {
     dotNet = dotNetRef;
-    const container = document.getElementById(containerId);
+    container = document.getElementById(containerId);
     nodes = new DataSet([]);
     edges = new DataSet([]);
     network = new Network(container, { nodes, edges }, baseOptions(false));
+    network.on('afterDrawing', drawInfoIcons);
+    network.on('click', e => {
+        const id = infoIconAt(e.pointer.canvas);
+        if (id) dotNet?.invokeMethodAsync('OnNodeOpen', id);
+    });
+    container.addEventListener('mousemove', onMouseMove);
     network.on('selectNode', e => {
         const id = e.nodes[0];
         highlight(id);
@@ -170,6 +181,8 @@ export function setPhysics(enabled) {
 }
 
 export function dispose() {
+    container?.removeEventListener('mousemove', onMouseMove);
+    container = null;
     network?.destroy();
     network = null;
     nodes = null;
@@ -208,7 +221,7 @@ function toVisNode(n) {
     const node = {
         id: n.id,
         label: n.label,
-        title: tooltip([n.label, n.type]),
+        title: tooltip([n.label, n.type, NO_DETAILS.has(n.type) ? null : 'Click the (i) icon or double-click for properties']),
         shape: style.shape,
         color: style.outline
             ? { background: '#ffffff', border: style.color, highlight: { background: '#f5f5f5', border: '#616161' } }
@@ -247,6 +260,77 @@ function toVisEdge(e) {
         edge.color = { ...edge.color, opacity: 0.5 };
     }
     return edge;
+}
+
+// Canvas-space centre of the info icon for every visible node that has a properties popup.
+function infoIconPositions() {
+    if (!network || !nodes || network.getScale() < INFO_ICON_MIN_SCALE) return [];
+    const result = [];
+    for (const n of rawNodes) {
+        if (NO_DETAILS.has(n.type)) continue;
+        const vis = nodes.get(n.id);
+        if (!vis || vis.hidden) continue;
+        const style = NODE_STYLES[n.type] ?? NODE_STYLES.External;
+        let x, y;
+        if (LABEL_INSIDE.has(style.shape)) {
+            const box = network.getBoundingBox(n.id);
+            if (!box) continue;
+            x = box.right - 2;
+            y = box.top + 2;
+        } else {
+            // Bounding boxes of these shapes include the label below them, so anchor to the shape itself.
+            const pos = network.getPositions([n.id])[n.id];
+            if (!pos) continue;
+            const r = vis.size ?? 20;
+            x = pos.x + r * 0.85;
+            y = pos.y - r * 0.85;
+        }
+        result.push({ id: n.id, x, y, opacity: vis.opacity ?? 1 });
+    }
+    return result;
+}
+
+function drawInfoIcons(ctx) {
+    const icons = infoIconPositions();
+    if (icons.length === 0) return;
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `bold ${INFO_ICON_RADIUS * 1.4}px Georgia, 'Times New Roman', serif`;
+    for (const icon of icons) {
+        ctx.globalAlpha = icon.opacity;
+        ctx.beginPath();
+        ctx.arc(icon.x, icon.y, INFO_ICON_RADIUS, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = '#0078D4';
+        ctx.stroke();
+        ctx.fillStyle = '#0078D4';
+        ctx.fillText('i', icon.x, icon.y + 1);
+    }
+    ctx.restore();
+}
+
+function infoIconAt(point) {
+    if (!point) return null;
+    const hit = INFO_ICON_RADIUS + 2;
+    const icons = infoIconPositions();
+    // Topmost (last drawn) icon wins when icons overlap.
+    for (let i = icons.length - 1; i >= 0; i--) {
+        const dx = point.x - icons[i].x;
+        const dy = point.y - icons[i].y;
+        if (dx * dx + dy * dy <= hit * hit) return icons[i].id;
+    }
+    return null;
+}
+
+function onMouseMove(e) {
+    if (!network || !container) return;
+    const rect = container.getBoundingClientRect();
+    const point = network.DOMtoCanvas({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    const canvas = container.querySelector('canvas');
+    if (canvas) canvas.style.cursor = infoIconAt(point) ? 'pointer' : '';
 }
 
 function highlight(id) {
