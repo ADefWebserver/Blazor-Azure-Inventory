@@ -1,3 +1,6 @@
+@using BlazorAzureInventory.Services.Azure
+@inject AzureContextService AzureContextService
+@inject ILogger<RequiredRoles> Logger
 @* Azure RBAC roles the signed-in user needs, from AzureRoleRequirements. *@
 <RadzenStack Gap="0.5rem">
     <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">
@@ -22,28 +25,76 @@
     <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">
         To assign them with the Azure CLI (run as an Owner or User Access Administrator):
     </RadzenText>
+    @if (_subscriptions.Count > 0)
+    {
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem" Wrap="FlexWrap.Wrap">
+            <RadzenLabel Text="Subscription" Component="requiredRolesSubscription" />
+            <RadzenDropDown TValue="string" @bind-Value="_subscriptionId" Data="_subscriptions" Name="requiredRolesSubscription"
+                            TextProperty="@nameof(SubscriptionOption.Text)" ValueProperty="@nameof(SubscriptionOption.Id)"
+                            AllowClear="true" AllowFiltering="@(_subscriptions.Count > 10)" Placeholder="Select a subscription"
+                            Style="min-width: 320px; max-width: 100%;" />
+        </RadzenStack>
+    }
     <pre class="setup-command"><code>@Commands</code></pre>
 </RadzenStack>
 
 @code {
     [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
 
-    private string Commands = BuildCommands(null);
+    /// <summary>Subscriptions to choose from. When null, the signed-in user's enabled subscriptions are loaded.</summary>
+    [Parameter] public IReadOnlyList<SubscriptionInfo>? Subscriptions { get; set; }
+
+    private string? _assignee;
+    private bool _signedIn;
+    private IReadOnlyList<SubscriptionOption> _subscriptions = [];
+    private string? _subscriptionId;
 
     protected override async Task OnParametersSetAsync()
     {
         var user = AuthState is null ? null : (await AuthState).User;
-        var assignee = user?.Identity?.IsAuthenticated == true ? user.FindFirst("preferred_username")?.Value : null;
-        Commands = BuildCommands(assignee);
+        _signedIn = user?.Identity?.IsAuthenticated == true;
+        _assignee = _signedIn ? user!.FindFirst("preferred_username")?.Value : null;
+        if (Subscriptions is not null) SetSubscriptions(Subscriptions);
     }
 
-    private static string BuildCommands(string? assignee)
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        assignee = string.IsNullOrWhiteSpace(assignee) ? "<user@domain>" : assignee;
-        return string.Join(Environment.NewLine,
-            $"az role assignment create --assignee \"{assignee}\" --role \"{AzureRoleRequirements.Reader}\" --scope \"/subscriptions/<subscription-id>\"",
-            $"az role assignment create --assignee \"{assignee}\" --role \"{AzureRoleRequirements.WebsiteContributor}\" --scope \"/subscriptions/<subscription-id>\"",
-            "# Optional, to edit tags:",
-            $"az role assignment create --assignee \"{assignee}\" --role \"{AzureRoleRequirements.TagContributor}\" --scope \"/subscriptions/<subscription-id>\"");
+        if (!firstRender || !_signedIn || Subscriptions is not null) return;
+        try
+        {
+            var context = await AzureContextService.GetContextAsync();
+            SetSubscriptions(context.Subscriptions.Where(s => s.State == "Enabled").ToList());
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            // Optional convenience: keep the <subscription-id> placeholder if subscriptions can't be listed.
+            Logger.LogInformation(ex, "Could not list subscriptions for the role assignment commands");
+        }
     }
+
+    private void SetSubscriptions(IEnumerable<SubscriptionInfo> subscriptions)
+    {
+        _subscriptions = subscriptions.Select(s => new SubscriptionOption(s.SubscriptionId, $"{s.DisplayName} ({s.SubscriptionId})")).ToList();
+        if (_subscriptionId is null || !_subscriptions.Any(s => s.Id == _subscriptionId))
+        {
+            _subscriptionId = _subscriptions.FirstOrDefault()?.Id;
+        }
+    }
+
+    private string Commands
+    {
+        get
+        {
+            var assignee = string.IsNullOrWhiteSpace(_assignee) ? "<user@domain>" : _assignee;
+            var scope = $"/subscriptions/{(string.IsNullOrWhiteSpace(_subscriptionId) ? "<subscription-id>" : _subscriptionId)}";
+            return string.Join(Environment.NewLine,
+                $"az role assignment create --assignee \"{assignee}\" --role \"{AzureRoleRequirements.Reader}\" --scope \"{scope}\"",
+                $"az role assignment create --assignee \"{assignee}\" --role \"{AzureRoleRequirements.WebsiteContributor}\" --scope \"{scope}\"",
+                "# Optional, to edit tags:",
+                $"az role assignment create --assignee \"{assignee}\" --role \"{AzureRoleRequirements.TagContributor}\" --scope \"{scope}\"");
+        }
+    }
+
+    private sealed record SubscriptionOption(string Id, string Text);
 }

@@ -16,7 +16,14 @@ public class RoleRequirementTests : BunitContext
     {
         JSInterop.Mode = JSRuntimeMode.Loose;
         Services.AddRadzenComponents();
+        // Only reached when RequiredRoles has to list subscriptions itself; tests pass them in instead.
+        Services.AddScoped(_ => new AzureContextService(null!, null!, Microsoft.Extensions.Logging.Abstractions.NullLogger<AzureContextService>.Instance));
     }
+
+    private static Task<Microsoft.AspNetCore.Components.Authorization.AuthenticationState> SignedIn(string upn) =>
+        Task.FromResult(new Microsoft.AspNetCore.Components.Authorization.AuthenticationState(
+            new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity(
+                [new System.Security.Claims.Claim("preferred_username", upn)], "test"))));
 
     private static string Site(string sub, string name) => $"/subscriptions/{sub}/resourceGroups/rg/providers/Microsoft.Web/sites/{name}";
 
@@ -91,15 +98,36 @@ public class RoleRequirementTests : BunitContext
     [Fact]
     public void RequiredRoles_fills_commands_with_signed_in_user()
     {
-        var user = new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity(
-            [new System.Security.Claims.Claim("preferred_username", "alex@contoso.com")], "test"));
-
         var cut = Render<BlazorAzureInventory.Components.Shared.RequiredRoles>(p => p
-            .AddCascadingValue(Task.FromResult(new Microsoft.AspNetCore.Components.Authorization.AuthenticationState(user))));
+            .AddCascadingValue(SignedIn("alex@contoso.com"))
+            .Add(x => x.Subscriptions, []));
 
         var markup = System.Net.WebUtility.HtmlDecode(cut.Markup);
-        Assert.Contains("az role assignment create --assignee \"alex@contoso.com\" --role \"Reader\"", markup);
+        Assert.Contains("az role assignment create --assignee \"alex@contoso.com\" --role \"Reader\" --scope \"/subscriptions/<subscription-id>\"", markup);
         Assert.DoesNotContain("<user@domain>", markup);
+    }
+
+    [Fact]
+    public void RequiredRoles_fills_commands_with_selected_subscription()
+    {
+        var subscriptions = new[]
+        {
+            new SubscriptionInfo(Sub1, "Production", "tenant", "Enabled"),
+            new SubscriptionInfo(Sub2, "Staging", "tenant", "Enabled")
+        };
+
+        var cut = Render<BlazorAzureInventory.Components.Shared.RequiredRoles>(p => p
+            .AddCascadingValue(SignedIn("alex@contoso.com"))
+            .Add(x => x.Subscriptions, subscriptions));
+
+        Assert.Contains($"--role \"Reader\" --scope \"/subscriptions/{Sub1}\"", System.Net.WebUtility.HtmlDecode(cut.Markup));
+
+        var dropDown = cut.FindComponent<Radzen.Blazor.RadzenDropDown<string>>();
+        cut.InvokeAsync(() => dropDown.Instance.ValueChanged.InvokeAsync(Sub2));
+
+        var markup = System.Net.WebUtility.HtmlDecode(cut.Markup);
+        Assert.Contains($"--role \"Website Contributor\" --scope \"/subscriptions/{Sub2}\"", markup);
+        Assert.DoesNotContain($"--scope \"/subscriptions/{Sub1}\"", markup);
     }
 
     [Fact]
