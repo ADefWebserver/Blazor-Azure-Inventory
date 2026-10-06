@@ -31,9 +31,19 @@
     [Parameter] public bool Disabled { get; set; }
 
     private List<SubscriptionOption> _options = new();
+    private AzureContext? _optionsContext;
+    private bool _optionsBuilt;
 
     protected override void OnParametersSet()
     {
+        // Radzen clears its selection whenever Data changes reference, so only rebuild when the context changes.
+        if (_optionsBuilt && ReferenceEquals(_optionsContext, Context))
+        {
+            return;
+        }
+
+        _optionsBuilt = true;
+        _optionsContext = Context;
         var tenants = Context?.Tenants.ToDictionary(t => t.TenantId, StringComparer.OrdinalIgnoreCase) ?? new();
         _options = (Context?.Subscriptions ?? [])
             .Select(s =>
@@ -46,7 +56,8 @@
             .ToList();
     }
 
-    private Task OnChanged(IEnumerable<string> value) => SelectedIdsChanged.InvokeAsync(value ?? []);
+    // Radzen emits a lazy view over its internal selection set; snapshot it so later mutations don't leak into the bound value.
+    private Task OnChanged(IEnumerable<string> value) => SelectedIdsChanged.InvokeAsync(value?.ToList() ?? []);
 
     private sealed record SubscriptionOption(string Id, string Name, string TenantLabel)
     {

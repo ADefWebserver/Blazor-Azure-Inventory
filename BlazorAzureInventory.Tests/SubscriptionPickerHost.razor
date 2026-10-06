@@ -1,0 +1,9 @@
+@using BlazorAzureInventory.Components.Inventory
+@using BlazorAzureInventory.Services.Azure
+
+<SubscriptionPicker Context="@Context" @bind-SelectedIds="Selected" />
+
+@code {
+    [Parameter] public AzureContext? Context { get; set; }
+    [Parameter] public IEnumerable<string> Selected { get; set; } = [];
+}
