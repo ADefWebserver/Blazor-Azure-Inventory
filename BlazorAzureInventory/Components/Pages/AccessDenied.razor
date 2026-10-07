@@ -1,0 +1,15 @@
+﻿@page "/access-denied"
+@layout MainLayout
+
+<PageTitle>Access denied</PageTitle>
+
+<RadzenCard class="centered-card rz-p-8">
+    <RadzenStack AlignItems="AlignItems.Center" Gap="1rem">
+        <RadzenIcon Icon="block" class="big-icon" IconColor="@Colors.Danger" />
+        <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1" class="rz-m-0">Access denied</RadzenText>
+        <RadzenText TextStyle="TextStyle.Body1" class="muted">
+            Your username is not authorized to access this application. Contact an administrator to request access.
+        </RadzenText>
+        <RadzenLink Path="/" Text="Go Home" Icon="home" />
+    </RadzenStack>
+</RadzenCard>

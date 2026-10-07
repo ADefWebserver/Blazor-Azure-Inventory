@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using BlazorAzureInventory.Models.Options;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.Extensions.Options;
 
@@ -8,20 +9,39 @@ namespace BlazorAzureInventory.Services.Auth;
 public static class UsernameGuard
 {
     private const string DeniedMessage = "This username is not allowed to access the application.";
+    private const string DeniedProperty = ".username_allow_list_denied";
+    private const string AccessDeniedPath = "/access-denied";
 
     public static IServiceCollection AddUsernameGuard(this IServiceCollection services)
     {
         services.Configure<OpenIdConnectOptions>(OpenIdConnectDefaults.AuthenticationScheme, options =>
         {
-            var previous = options.Events.OnTokenValidated;
+            var previousTokenValidated = options.Events.OnTokenValidated;
             options.Events.OnTokenValidated = async context =>
             {
-                if (previous is not null) await previous(context);
+                if (previousTokenValidated is not null) await previousTokenValidated(context);
                 if (context.Result?.Failure is not null || TenantAccess.IsTenantAccess(context.Properties)) return;
 
                 var security = context.HttpContext.RequestServices
                     .GetRequiredService<IOptionsMonitor<SecurityOptions>>().CurrentValue;
-                if (!IsUsernameAllowed(security, context.Principal)) context.Fail(DeniedMessage);
+                if (IsUsernameAllowed(security, context.Principal)) return;
+
+                var properties = context.Properties ??= new AuthenticationProperties();
+                properties.Items[DeniedProperty] = bool.TrueString;
+                context.Fail(DeniedMessage);
+            };
+
+            var previousRemoteFailure = options.Events.OnRemoteFailure;
+            options.Events.OnRemoteFailure = async context =>
+            {
+                if (context.Properties?.Items.ContainsKey(DeniedProperty) == true)
+                {
+                    context.Response.Redirect(AccessDeniedPath);
+                    context.HandleResponse();
+                    return;
+                }
+
+                if (previousRemoteFailure is not null) await previousRemoteFailure(context);
             };
         });
         return services;
