@@ -3,8 +3,10 @@
 @using BlazorAzureInventory.Models.Options
 @using BlazorAzureInventory.Services.AI
 @using BlazorAzureInventory.Services.Auth
+@using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.Extensions.Options
 @using System.Text.Json
+@inject AuthenticationStateProvider AuthenticationStateProvider
 @inject SessionAISettingsService SettingsService
 @inject SecuritySettingsStore SecuritySettingsStore
 @inject IOptionsMonitor<SecurityOptions> SecurityOptions
@@ -20,11 +22,11 @@
             <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">Authentication access</RadzenText>
             <RadzenAlert AlertStyle="AlertStyle.Warning" Shade="Shade.Lighter" AllowClose="false" Icon="warning">
                 When enabled, only users whose sign-in username exactly matches an entry below can authenticate.
-                Matching is case-insensitive and spaces around entries are ignored. An enabled empty list denies every new sign-in,
-                including yours. Changes apply to future sign-ins; existing sessions are not signed out.
+                Matching is case-insensitive and spaces around entries are ignored. When the restriction is enabled, your current
+                sign-in username is automatically added to the list. Changes apply to future sign-ins; existing sessions are not signed out.
             </RadzenAlert>
             <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
-                <RadzenSwitch @bind-Value="_usernameAllowListEnabled" Name="usernameAllowListEnabled" />
+                <RadzenSwitch Value="_usernameAllowListEnabled" ValueChanged="OnUsernameAllowListEnabledChangedAsync" Name="usernameAllowListEnabled" />
                 <RadzenLabel Text="Restrict authentication by username" Component="usernameAllowListEnabled" />
             </RadzenStack>
             <RadzenLabel Text="Allowed usernames (comma-separated)" Component="allowedUsernames" />
@@ -70,6 +72,26 @@
         var security = SecurityOptions.CurrentValue;
         _usernameAllowListEnabled = security.UsernameAllowListEnabled;
         _allowedUsernames = security.AllowedUsernames;
+    }
+
+    private async Task OnUsernameAllowListEnabledChangedAsync(bool enabled)
+    {
+        _usernameAllowListEnabled = enabled;
+        if (!enabled)
+        {
+            return;
+        }
+
+        var authenticationState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var username = UsernameGuard.GetUsername(authenticationState.User);
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            return;
+        }
+
+        var allowedUsernames = UsernameGuard.ParseAllowedUsernames(_allowedUsernames);
+        allowedUsernames.Add(username);
+        _allowedUsernames = string.Join(", ", allowedUsernames);
     }
 
     private async Task SaveSecurityAsync()
