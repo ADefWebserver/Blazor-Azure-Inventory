@@ -4,6 +4,10 @@ using BlazorAzureInventory.Models.Options;
 using BlazorAzureInventory.Services.AI;
 using BlazorAzureInventory.Services.Auth;
 using BlazorAzureInventory.Services.Azure;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
 namespace BlazorAzureInventory.Tests;
@@ -83,9 +87,41 @@ public class UsernameGuardTests
     public void Enabled_allow_list_rejects_missing_username_claim()
     {
         var options = new SecurityOptions { UsernameAllowListEnabled = true, AllowedUsernames = "alice@contoso.com" };
-        var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.Name, "Alice")])) ;
+        var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.Name, "Alice")]));
 
         Assert.False(UsernameGuard.IsUsernameAllowed(options, principal));
+    }
+
+    [Fact]
+    public async Task Rejected_sign_in_is_handled_with_access_denied_redirect()
+    {
+        var services = new ServiceCollection();
+        services.AddOptions();
+        services.Configure<SecurityOptions>(options =>
+        {
+            options.UsernameAllowListEnabled = true;
+            options.AllowedUsernames = "alice@contoso.com";
+        });
+        services.AddUsernameGuard();
+        await using var provider = services.BuildServiceProvider();
+
+        var oidcOptions = provider.GetRequiredService<IOptionsMonitor<OpenIdConnectOptions>>()
+            .Get(OpenIdConnectDefaults.AuthenticationScheme);
+        var httpContext = new DefaultHttpContext { RequestServices = provider };
+        var scheme = new AuthenticationScheme(
+            OpenIdConnectDefaults.AuthenticationScheme,
+            OpenIdConnectDefaults.AuthenticationScheme,
+            typeof(OpenIdConnectHandler));
+        var principal = new ClaimsPrincipal(
+            new ClaimsIdentity([new Claim("preferred_username", "bob@contoso.com")], "test"));
+        var context = new TokenValidatedContext(
+            httpContext, scheme, oidcOptions, principal, new AuthenticationProperties());
+
+        await oidcOptions.Events.TokenValidated(context);
+
+        Assert.True(context.Result?.Handled);
+        Assert.Equal(StatusCodes.Status302Found, httpContext.Response.StatusCode);
+        Assert.Equal("/access-denied", httpContext.Response.Headers.Location);
     }
 }
 

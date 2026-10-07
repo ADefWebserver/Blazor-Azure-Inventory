@@ -1,6 +1,5 @@
 using System.Security.Claims;
 using BlazorAzureInventory.Models.Options;
-using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.Extensions.Options;
 
@@ -8,8 +7,6 @@ namespace BlazorAzureInventory.Services.Auth;
 
 public static class UsernameGuard
 {
-    private const string DeniedMessage = "This username is not allowed to access the application.";
-    private const string DeniedProperty = ".username_allow_list_denied";
     private const string AccessDeniedPath = "/access-denied";
 
     public static IServiceCollection AddUsernameGuard(this IServiceCollection services)
@@ -26,22 +23,8 @@ public static class UsernameGuard
                     .GetRequiredService<IOptionsMonitor<SecurityOptions>>().CurrentValue;
                 if (IsUsernameAllowed(security, context.Principal)) return;
 
-                var properties = context.Properties ??= new AuthenticationProperties();
-                properties.Items[DeniedProperty] = bool.TrueString;
-                context.Fail(DeniedMessage);
-            };
-
-            var previousRemoteFailure = options.Events.OnRemoteFailure;
-            options.Events.OnRemoteFailure = async context =>
-            {
-                if (context.Properties?.Items.ContainsKey(DeniedProperty) == true)
-                {
-                    context.Response.Redirect(AccessDeniedPath);
-                    context.HandleResponse();
-                    return;
-                }
-
-                if (previousRemoteFailure is not null) await previousRemoteFailure(context);
+                context.Response.Redirect(AccessDeniedPath);
+                context.HandleResponse();
             };
         });
         return services;
