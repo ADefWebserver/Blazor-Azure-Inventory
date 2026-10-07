@@ -53,6 +53,8 @@ public sealed class GraphSessionOptions
 public sealed class SecurityOptions
 {
     public string[] AllowedTenantIds { get; set; } = [];
+    public bool UsernameAllowListEnabled { get; set; }
+    public string AllowedUsernames { get; set; } = string.Empty;
 }
 
 public sealed class AIOptions

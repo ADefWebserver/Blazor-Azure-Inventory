@@ -1,6 +1,8 @@
 using System.Net;
+using System.Security.Claims;
 using BlazorAzureInventory.Models.Options;
 using BlazorAzureInventory.Services.AI;
+using BlazorAzureInventory.Services.Auth;
 using BlazorAzureInventory.Services.Azure;
 using Microsoft.Extensions.Options;
 
@@ -33,6 +35,58 @@ public class ScmHostValidatorTests
 
     [Fact]
     public void Rejects_http_uris() => Assert.False(_validator.IsAllowed(new Uri("http://shop-web.scm.azurewebsites.net/")));
+}
+
+public class UsernameGuardTests
+{
+    [Fact]
+    public void Disabled_allow_list_permits_missing_username()
+    {
+        var options = new SecurityOptions { UsernameAllowListEnabled = false };
+
+        Assert.True(UsernameGuard.IsUsernameAllowed(options, null));
+    }
+
+    [Theory]
+    [InlineData("alice@contoso.com", "alice@contoso.com,bob@contoso.com")]
+    [InlineData("ALICE@CONTOSO.COM", " alice@contoso.com , , bob@contoso.com ")]
+    public void Enabled_allow_list_permits_configured_username(string username, string allowedUsernames)
+    {
+        var options = new SecurityOptions { UsernameAllowListEnabled = true, AllowedUsernames = allowedUsernames };
+        var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim("preferred_username", username)]));
+
+        Assert.True(UsernameGuard.IsUsernameAllowed(options, principal));
+    }
+
+    [Fact]
+    public void Enabled_allow_list_rejects_unlisted_username()
+    {
+        var options = new SecurityOptions { UsernameAllowListEnabled = true, AllowedUsernames = "alice@contoso.com" };
+        var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.Upn, "bob@contoso.com")]));
+
+        Assert.False(UsernameGuard.IsUsernameAllowed(options, principal));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" , , ")]
+    public void Enabled_empty_allow_list_rejects_sign_in(string? allowedUsernames)
+    {
+        var options = new SecurityOptions { UsernameAllowListEnabled = true, AllowedUsernames = allowedUsernames ?? string.Empty };
+        var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.Email, "alice@contoso.com")]));
+
+        Assert.False(UsernameGuard.IsUsernameAllowed(options, principal));
+    }
+
+    [Fact]
+    public void Enabled_allow_list_rejects_missing_username_claim()
+    {
+        var options = new SecurityOptions { UsernameAllowListEnabled = true, AllowedUsernames = "alice@contoso.com" };
+        var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.Name, "Alice")])) ;
+
+        Assert.False(UsernameGuard.IsUsernameAllowed(options, principal));
+    }
 }
 
 public class EndpointGuardTests

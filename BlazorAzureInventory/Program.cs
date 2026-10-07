@@ -41,8 +41,10 @@ public class Program
             .EnableTokenAcquisitionToCallDownstreamApi(armScopes)
             .AddInMemoryTokenCaches();
         builder.Services.AddTenantGuard();
+        builder.Services.AddUsernameGuard();
         builder.Services.AddTokenCacheSessionGuard(armScopes);
         builder.Services.AddTenantAccess();
+        builder.Services.AddSingleton<SecuritySettingsStore>();
         builder.Services.AddSingleton<SetupStatusService>();
 
         builder.Services.AddControllersWithViews().AddMicrosoftIdentityUI();

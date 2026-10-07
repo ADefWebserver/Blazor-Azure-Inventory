@@ -1,13 +1,44 @@
 @page "/settings"
 @attribute [Authorize]
+@using BlazorAzureInventory.Models.Options
 @using BlazorAzureInventory.Services.AI
+@using BlazorAzureInventory.Services.Auth
+@using Microsoft.Extensions.Options
+@using System.Text.Json
 @inject SessionAISettingsService SettingsService
+@inject SecuritySettingsStore SecuritySettingsStore
+@inject IOptionsMonitor<SecurityOptions> SecurityOptions
 @inject NotificationService NotificationService
 
-<PageTitle>AI Settings - Azure Inventory</PageTitle>
+<PageTitle>Settings - Azure Inventory</PageTitle>
 
 <RadzenStack Gap="1rem" Style="max-width: 860px;">
-    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1" class="page-title">AI Settings</RadzenText>
+    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1" class="page-title">Settings</RadzenText>
+
+    <RadzenCard class="rz-p-6">
+        <RadzenStack Gap="1rem">
+            <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">Authentication access</RadzenText>
+            <RadzenAlert AlertStyle="AlertStyle.Warning" Shade="Shade.Lighter" AllowClose="false" Icon="warning">
+                When enabled, only users whose sign-in username exactly matches an entry below can authenticate.
+                Matching is case-insensitive and spaces around entries are ignored. An enabled empty list denies every new sign-in,
+                including yours. Changes apply to future sign-ins; existing sessions are not signed out.
+            </RadzenAlert>
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                <RadzenSwitch @bind-Value="_usernameAllowListEnabled" Name="usernameAllowListEnabled" />
+                <RadzenLabel Text="Restrict authentication by username" Component="usernameAllowListEnabled" />
+            </RadzenStack>
+            <RadzenLabel Text="Allowed usernames (comma-separated)" Component="allowedUsernames" />
+            <RadzenTextArea @bind-Value="_allowedUsernames" Name="allowedUsernames" Rows="3"
+                            Placeholder="alice@contoso.com, bob@contoso.com" Style="width: 100%; resize: vertical;" />
+            <RadzenText TextStyle="TextStyle.Caption">
+                Values are saved to the Security section of appsettings.json. Deployment or environment-variable overrides may take precedence,
+                and the host must permit writing to that file.
+            </RadzenText>
+            <RadzenButton Text="Save authentication access" Icon="save" Click="@SaveSecurityAsync" Disabled="@_savingSecurity" Style="align-self: flex-start;" />
+        </RadzenStack>
+    </RadzenCard>
+
+    <RadzenText TextStyle="TextStyle.H5" TagName="TagName.H2" class="rz-mt-2 rz-mb-0">AI Settings</RadzenText>
 
     <RadzenAlert AlertStyle="AlertStyle.Info" Shade="Shade.Lighter" AllowClose="false" Icon="shield">
         Your API key is kept only for this session, is encrypted in memory, and is never saved.
@@ -30,6 +61,35 @@
 
 @code {
     private AIServiceSettingsEditor? _editor;
+    private bool _usernameAllowListEnabled;
+    private string _allowedUsernames = string.Empty;
+    private bool _savingSecurity;
+
+    protected override void OnInitialized()
+    {
+        var security = SecurityOptions.CurrentValue;
+        _usernameAllowListEnabled = security.UsernameAllowListEnabled;
+        _allowedUsernames = security.AllowedUsernames;
+    }
+
+    private async Task SaveSecurityAsync()
+    {
+        _savingSecurity = true;
+        try
+        {
+            await SecuritySettingsStore.SaveUsernameAllowListAsync(_usernameAllowListEnabled, _allowedUsernames);
+            _allowedUsernames = string.Join(", ", UsernameGuard.ParseAllowedUsernames(_allowedUsernames));
+            NotificationService.Notify(NotificationSeverity.Success, "Saved", "Authentication access settings were saved.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            NotificationService.Notify(NotificationSeverity.Error, "Could not save", ex.Message);
+        }
+        finally
+        {
+            _savingSecurity = false;
+        }
+    }
 
     private async Task ClearAsync()
     {

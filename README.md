@@ -41,6 +41,8 @@ Settings live in [BlazorAzureInventory/appsettings.json](BlazorAzureInventory/ap
 | `AzureMcp:Scopes` | `api://<azinventory-mcp-client-id>/Mcp.Tools.Read` |
 | `AzureMcp:AllowedTools` | Must match the `--tool` list in [AzureMcpServer/Dockerfile](AzureMcpServer/Dockerfile) |
 | `Security:AllowedTenantIds` | Optional tenant allowlist (empty allows any organization) |
+| `Security:UsernameAllowListEnabled` | Enables username-based sign-in restriction; defaults to `false` |
+| `Security:AllowedUsernames` | Comma-separated sign-in usernames allowed when the username allow-list is enabled. Matching is case-insensitive and ignores surrounding spaces; an enabled empty list denies all new sign-ins |
 | `AI:DefaultProvider` | Optional app-wide AI provider used by everyone who has not entered their own on **Settings**. Set `ServiceType` (`OpenAI`, `AzureOpenAI`, `AzureAIFoundry`, `Anthropic`, or `GoogleAI`), `ApiKey`, `AIModel`, and for Azure providers `Endpoint` (plus optional `ApiVersion`, `DeploymentPath`, `ApiProtocol`). Leave `ServiceType` or `ApiKey` empty to require each user to supply their own. Keep the key in user secrets, environment variables (`AI__DefaultProvider__ApiKey`), or Key Vault, not in `appsettings.json` |
 
 For local development, replace the `<...>` placeholders in `BlazorAzureInventory/appsettings.Local.json` (web app) and `BlazorAzureInventorySolution.AppHost/appsettings.Local.json` (`mcpTenantId` and `mcpClientId` parameters for the MCP container). Both files are git-ignored, loaded right after `appsettings.{Environment}.json`, and the web app's file is loaded only in Development and never published. While any required value is missing, the home page lists the exact steps to fix it.
