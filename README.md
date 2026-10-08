@@ -45,7 +45,7 @@ Settings live in [BlazorAzureInventory/appsettings.json](BlazorAzureInventory/ap
 | `Security:AllowedUsernames` | Comma-separated sign-in usernames allowed when the username allow-list is enabled. Matching is case-insensitive and ignores surrounding spaces; an enabled empty list denies all new sign-ins |
 | `AI:DefaultProvider` | Optional app-wide AI provider used by everyone who has not entered their own on **Settings**. Set `ServiceType` (`OpenAI`, `AzureOpenAI`, `AzureAIFoundry`, `Anthropic`, or `GoogleAI`), `ApiKey`, `AIModel`, and for Azure providers `Endpoint` (plus optional `ApiVersion`, `DeploymentPath`, `ApiProtocol`). Leave `ServiceType` or `ApiKey` empty to require each user to supply their own. Keep the key in user secrets, environment variables (`AI__DefaultProvider__ApiKey`), or Key Vault, not in `appsettings.json` |
 
-For local development, replace the `<...>` placeholders in `BlazorAzureInventory/appsettings.Local.json` (web app) and `BlazorAzureInventorySolution.AppHost/appsettings.Local.json` (`mcpTenantId` and `mcpClientId` parameters for the MCP container). Both files are git-ignored, loaded right after `appsettings.{Environment}.json`, and the web app's file is loaded only in Development and never published. While any required value is missing, the home page lists the exact steps to fix it.
+For local development, replace the `<...>` placeholders in `BlazorAzureInventory/appsettings.Local.json` (web app) and `BlazorAzureInventorySolution.AppHost/appsettings.Local.json` (`mcpTenantId`, `mcpClientId`, and `mcpClientSecret` parameters for the MCP container). Both files are git-ignored, loaded right after `appsettings.{Environment}.json`, and the web app's file is loaded only in Development and never published. While any required value is missing, the home page lists the exact steps to fix it.
 
 Alternatively, override values with user secrets on the `BlazorAzureInventory` project (these take precedence over `appsettings.Local.json`):
 
@@ -61,7 +61,9 @@ dotnet user-secrets --project BlazorAzureInventory set "AI:DefaultProvider:AIMod
 dotnet user-secrets --project BlazorAzureInventory set "AI:DefaultProvider:ApiKey" "<key>"
 ```
 
-The AppHost asks for the `mcpTenantId` and `mcpClientId` parameters used by the MCP container's incoming authentication.
+The AppHost asks for the `mcpTenantId` and `mcpClientId` parameters used by the MCP container's incoming authentication. When running locally it also asks for `mcpClientSecret` (an `azinventory-mcp` client secret the container uses for On-Behalf-Of); keep it in `appsettings.Local.json` or AppHost user secrets (`Parameters:mcpClientSecret`).
+
+When deploying to Azure Container Apps (`aspire deploy` or `azd up`), the AppHost also asks for `webClientId` (the `azinventory-web` client ID). No secrets are deployed: each app gets a user-assigned managed identity, so add a federated identity credential for that identity to the matching app registration. The web container app is named `azinventory-dev`; change it in [AppHost.cs](BlazorAzureInventorySolution.AppHost/AppHost.cs) for other environments.
 
 ## Run
 
