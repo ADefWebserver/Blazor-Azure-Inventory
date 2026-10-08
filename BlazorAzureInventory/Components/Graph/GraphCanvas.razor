@@ -6,7 +6,7 @@
         <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
             <RadzenButton Text="Fit" Icon="fit_screen" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@FitAsync" />
             <RadzenButton Text="@(_physics ? "Freeze physics" : "Resume physics")" Icon="@(_physics ? "pause" : "play_arrow")"
-                          Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@TogglePhysicsAsync" />
+                          Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@TogglePhysicsAsync" Disabled="@_rendering" />
             <RadzenButton Text="Rebuild graph" Icon="refresh" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light"
                           Click="@(() => OnRebuild.InvokeAsync())" IsBusy="@_rendering" />
         </RadzenStack>
@@ -36,7 +36,7 @@
     private DotNetObjectReference<GraphCanvas>? _selfRef;
     private GraphDocument? _renderedGraph;
     private bool _rendering = true;
-    private bool _physics = true;
+    private bool _physics;
     private int _nodeCount;
     private int _edgeCount;
 
@@ -60,7 +60,7 @@
     private async Task RenderGraphAsync(GraphDocument graph)
     {
         _rendering = true;
-        _physics = true;
+        _physics = false;
         StateHasChanged();
 
         // Streaming avoids building one large interop string for multi-MB graphs.

@@ -2,14 +2,24 @@
 // textContent and innerHTML is never used with graph data.
 import { Network, DataSet } from '../lib/vis-network/standalone/esm/vis-network.min.js';
 
+// vis-network sizes 'database' shapes as a square around the label, so long names produce huge cylinders.
+// A fixed-size SVG cylinder with the label underneath keeps database nodes compact.
+function cylinder(fill, top) {
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='56' viewBox='0 0 48 56'>`
+        + `<path d='M4 10 V46 A20 8 0 0 0 44 46 V10 Z' fill='${fill}'/>`
+        + `<path d='M4 24 A20 8 0 0 0 44 24 M4 36 A20 8 0 0 0 44 36' fill='none' stroke='#ffffff' stroke-opacity='0.35' stroke-width='1.5'/>`
+        + `<ellipse cx='24' cy='10' rx='20' ry='8' fill='${top}' stroke='${fill}' stroke-width='1.5'/></svg>`;
+    return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+}
+
 const NODE_STYLES = {
     WebApp: { shape: 'box', color: '#0078D4' },
     FunctionApp: { shape: 'box', color: '#F2A900' },
     WebAppSlot: { shape: 'box', color: '#69AFE5', size: 'small' },
     ContainerApp: { shape: 'hexagon', color: '#008575' },
     ContainerRegistry: { shape: 'diamond', color: '#004E46' },
-    SqlServer: { shape: 'database', color: '#2E7D32' },
-    SqlDatabase: { shape: 'database', color: '#66BB6A', size: 'small' },
+    SqlServer: { shape: 'image', color: '#2E7D32', image: cylinder('#2E7D32', '#4CAF50') },
+    SqlDatabase: { shape: 'image', color: '#66BB6A', size: 'small', image: cylinder('#66BB6A', '#A5D6A7') },
     StorageAccount: { shape: 'ellipse', color: '#7B1FA2' },
     BlobContainer: { shape: 'dot', color: '#CE93D8' },
     CosmosAccount: { shape: 'ellipse', color: '#5C6BC0' },
@@ -28,6 +38,10 @@ const STRUCTURAL = new Set(['CONTAINS', 'HAS_SLOT', 'HOSTS_DATABASE', 'HAS_CONTA
 const NO_DETAILS = new Set(['Tenant']);
 const INFO_ICON_RADIUS = 8;
 const INFO_ICON_MIN_SCALE = 0.35;
+const MAX_LABEL_LENGTH = 28;
+// Drop shadows are costly to redraw, so only use them on smaller graphs.
+const SHADOW_NODE_LIMIT = 500;
+const FONT_FACE = "'Segoe UI', system-ui, -apple-system, Arial, sans-serif";
 
 let network = null;
 let container = null;
@@ -99,16 +113,18 @@ export async function renderFromStream(streamRef) {
     rawNodes = graph.nodes ?? [];
     rawEdges = graph.edges ?? [];
     const large = rawNodes.length > 1500;
+    const shadow = rawNodes.length <= SHADOW_NODE_LIMIT;
 
     network.setOptions(baseOptions(large));
     nodes.clear();
     edges.clear();
-    nodes.add(rawNodes.map(toVisNode));
+    nodes.add(rawNodes.map(n => toVisNode(n, shadow)));
     edges.add(rawEdges.map(toVisEdge));
     if (lastFilter) applyFilter(lastFilter);
 
+    // Physics is frozen once the initial layout settles; the user can resume it from the toolbar.
     const done = () => {
-        if (large) network.setOptions({ physics: false });
+        network.setOptions({ physics: { enabled: false } });
         network.fit({ animation: false });
         dotNet?.invokeMethodAsync('OnRenderComplete', rawNodes.length, rawEdges.length);
     };
@@ -116,7 +132,7 @@ export async function renderFromStream(streamRef) {
         done();
     } else {
         network.once('stabilizationIterationsDone', done);
-        network.stabilize(200);
+        network.stabilize(large ? 200 : 400);
     }
 }
 
@@ -200,41 +216,72 @@ function baseOptions(large) {
         physics: {
             enabled: true,
             solver: 'barnesHut',
-            barnesHut: { gravitationalConstant: -6000, springLength: 140, avoidOverlap: 0.2 },
-            stabilization: { iterations: 200 }
+            barnesHut: { gravitationalConstant: -9000, centralGravity: 0.25, springLength: 170, springConstant: 0.03, avoidOverlap: 0.6 },
+            stabilization: { iterations: large ? 200 : 400 }
         },
-        nodes: { font: { face: 'Segoe UI, Arial, sans-serif', size: 13 }, borderWidth: 1 },
-        edges: { smooth: { type: 'continuous' }, font: { size: 9, color: '#555', strokeWidth: 3, strokeColor: '#ffffff', align: 'middle' } }
+        nodes: {
+            font: { face: FONT_FACE, size: 13 },
+            borderWidth: 1,
+            // Hide labels once they become too small to read when zoomed out.
+            scaling: { label: { drawThreshold: 7 } }
+        },
+        edges: {
+            smooth: large ? false : { type: 'continuous' },
+            selectionWidth: 1.5,
+            hoverWidth: 0.5,
+            font: { face: FONT_FACE, size: 9, color: '#4b5563', strokeWidth: 3, strokeColor: '#ffffff', align: 'middle' },
+            scaling: { label: { drawThreshold: 8 } }
+        }
     };
 }
 
-function tooltip(lines) {
+function tooltip(label, type, hint) {
     const el = document.createElement('div');
-    el.style.whiteSpace = 'pre';
-    el.textContent = lines.filter(Boolean).join('\n');
+    el.className = 'graph-tip';
+    const parts = [[label, 'graph-tip-title'], [type, 'graph-tip-type'], [hint, 'graph-tip-hint']];
+    for (const [text, cls] of parts) {
+        if (!text) continue;
+        const line = document.createElement('div');
+        line.className = cls;
+        line.textContent = text;
+        el.appendChild(line);
+    }
     return el;
 }
 
-function toVisNode(n) {
+function shortLabel(label) {
+    const text = String(label ?? '');
+    return text.length > MAX_LABEL_LENGTH ? text.slice(0, MAX_LABEL_LENGTH - 1) + '\u2026' : text;
+}
+
+function toVisNode(n, shadow) {
     const style = NODE_STYLES[n.type] ?? NODE_STYLES.External;
     const inside = LABEL_INSIDE.has(style.shape);
+    const small = style.size === 'small';
     const node = {
         id: n.id,
-        label: n.label,
-        title: tooltip([n.label, n.type, NO_DETAILS.has(n.type) ? null : 'Click the (i) icon or double-click for properties']),
+        label: shortLabel(n.label),
+        title: tooltip(n.label, n.type, NO_DETAILS.has(n.type) ? null : 'Click the (i) icon or double-click for properties'),
         shape: style.shape,
         color: style.outline
-            ? { background: '#ffffff', border: style.color, highlight: { background: '#f5f5f5', border: '#616161' } }
-            : { background: style.color, border: style.color, highlight: { background: style.color, border: '#1f2937' } },
-        font: { color: inside && !style.outline ? '#ffffff' : '#1f2937', size: style.size === 'small' ? 11 : 13 },
-        margin: style.size === 'small' ? 6 : 10,
-        size: style.size === 'small' ? 14 : 20,
-        borderWidth: style.outline ? 2 : 1
+            ? { background: '#ffffff', border: style.color, highlight: { background: '#f5f5f5', border: '#616161' }, hover: { background: '#fafafa', border: '#616161' } }
+            : { background: style.color, border: style.color, highlight: { background: style.color, border: '#1f2937' }, hover: { background: style.color, border: '#1f2937' } },
+        font: inside && !style.outline
+            ? { color: '#ffffff', size: small ? 11 : 13 }
+            // Labels drawn outside the shape get a halo so they stay readable over edges.
+            : { color: '#1f2937', size: small ? 11 : 12, strokeWidth: 3, strokeColor: 'rgba(255,255,255,0.9)' },
+        margin: small ? { top: 5, bottom: 5, left: 8, right: 8 } : { top: 8, bottom: 8, left: 12, right: 12 },
+        size: small ? 14 : 20,
+        borderWidth: style.outline ? 2 : 1,
+        borderWidthSelected: 3,
+        shapeProperties: { borderRadius: 6 },
+        shadow: shadow ? { enabled: true, color: 'rgba(15,23,42,0.18)', size: 6, x: 0, y: 2 } : false
     };
+    if (style.image) node.image = style.image;
     if (style.dashed) {
-        node.color = { background: '#f3f4f6', border: style.color };
-        node.font = { color: '#374151' };
-        node.shapeProperties = { borderDashes: [5, 5] };
+        node.color = { background: '#f3f4f6', border: style.color, highlight: { background: '#e5e7eb', border: '#4b5563' }, hover: { background: '#e5e7eb', border: '#4b5563' } };
+        node.font = { color: '#374151', size: 12 };
+        node.shapeProperties = { borderDashes: [5, 5], borderRadius: 6 };
     }
     return node;
 }
@@ -244,16 +291,16 @@ function toVisEdge(e) {
     const edge = { id: e.id, from: e.source, to: e.target, arrows: { to: { enabled: true, scaleFactor: 0.6 } } };
     switch (e.type) {
         case 'CONNECTS_TO':
-            Object.assign(edge, { color: { color: '#0078D4' }, width: 2, label: 'CONNECTS_TO' });
+            Object.assign(edge, { color: { color: '#0078D4', highlight: '#005A9E', hover: '#005A9E', opacity: 0.7 }, width: 1.5, label: 'CONNECTS_TO' });
             break;
         case 'REFERENCES_SECRET':
-            Object.assign(edge, { color: { color: '#C8A400' }, width: 2, dashes: true, label: 'REFERENCES_SECRET' });
+            Object.assign(edge, { color: { color: '#C8A400', highlight: '#8A7100', hover: '#8A7100', opacity: 0.8 }, width: 1.5, dashes: true, label: 'REFERENCES_SECRET' });
             break;
         case 'PULLS_IMAGE_FROM':
-            Object.assign(edge, { color: { color: '#008575' }, width: 2, dashes: [2, 4], label: 'PULLS_IMAGE_FROM' });
+            Object.assign(edge, { color: { color: '#008575', highlight: '#004E46', hover: '#004E46', opacity: 0.8 }, width: 1.5, dashes: [2, 4], label: 'PULLS_IMAGE_FROM' });
             break;
         default:
-            Object.assign(edge, { color: { color: '#BDBDBD' }, width: 1 });
+            Object.assign(edge, { color: { color: '#CBD5E1', highlight: '#64748B', hover: '#94A3B8' }, width: 1 });
     }
     if (low) {
         edge.dashes = true;
