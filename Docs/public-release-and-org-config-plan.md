@@ -698,6 +698,6 @@ Add a short, generic version of this list to `Docs/deployment.md` ("If you deplo
 
 | ID | Question | Recommendation |
 |---|---|---|
-| D1 | Publish `Docs/SecurityReview.md` now, after updating finding statuses, or keep it in the private bundle until the open High and Medium findings are fixed? | Update statuses first. Publish only when no High finding is open on the live deployment; until then keep it in the private bundle |
+| D1 | Publish `Docs/SecurityReview.md` now, after updating finding statuses, or keep it in the private bundle until the open High and Medium findings are fixed? | **Resolved 2026-10-11:** statuses updated against the code; both High findings are fixed, so the review is committed |
 | D2 | Keep the canonical `appsettings.Org.json` only in Teams or SharePoint, or also in Key Vault? | Teams or SharePoint now. Add Key Vault when a pipeline deploys without a person |
 | D3 | Move deployment to a GitHub Actions workflow with a protected `org` environment and OIDC to Azure? | Out of scope for this plan. The script is designed so a workflow can call it later |
