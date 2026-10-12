@@ -1,4 +1,5 @@
 using Aspire.Hosting.Azure;
+using Azure.Provisioning.AppContainers;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Configuration.Json;
 using Microsoft.Extensions.FileProviders;
@@ -10,14 +11,24 @@ var builder = DistributedApplication.CreateBuilder(args);
 var sources = builder.Configuration.Sources;
 var settingsIndex = sources.ToList().FindLastIndex(s =>
     s is FileConfigurationSource { Path: { } path } && path.StartsWith("appsettings", StringComparison.OrdinalIgnoreCase));
+
+// appsettings.Org.json holds a deployment's organization-specific values; it is git-ignored and shared privately.
+JsonConfigurationSource AppHostJson(string path) => new()
+{
+    FileProvider = new PhysicalFileProvider(builder.AppHostDirectory),
+    Path = path,
+    Optional = true
+};
+
 if (builder.ExecutionContext.IsRunMode)
 {
-    sources.Insert(settingsIndex + 1, new JsonConfigurationSource
-    {
-        FileProvider = new PhysicalFileProvider(builder.AppHostDirectory),
-        Path = "appsettings.Local.json",
-        Optional = true
-    });
+    sources.Insert(settingsIndex + 1, AppHostJson("appsettings.Org.json"));
+    sources.Insert(settingsIndex + 2, AppHostJson("appsettings.Local.json"));
+}
+else
+{
+    // Appended, not inserted: inserting reloads the one-shot deploy-state source.
+    sources.Add(AppHostJson("appsettings.Org.json"));
 }
 
 // Self-hosted Azure MCP Server (HTTP transport, read-only, On-Behalf-Of). Confirm the container's listening port
@@ -34,6 +45,8 @@ var mcp = builder.AddDockerfile("azure-mcp", "../AzureMcpServer")
 
 var web = builder.AddProject<Projects.BlazorAzureInventory>("blazorazureinventory")
     .WithReference(mcp.GetEndpoint("http"))
+    .WithEnvironment("UserManagement__BootstrapAdmins", builder.Configuration["UserManagement:BootstrapAdmins"] ?? "")
+    .WithEnvironment("UserManagement__SupportContact", builder.Configuration["UserManagement:SupportContact"] ?? "")
     .WithExternalHttpEndpoints();
 
 if (builder.ExecutionContext.IsPublishMode)
@@ -55,13 +68,24 @@ if (builder.ExecutionContext.IsPublishMode)
         .WithEnvironment("AzureMcp__Scopes__0", ReferenceExpression.Create($"api://{mcpClientId}/Mcp.Tools.ReadWrite"))
         // Container Apps terminates TLS; forwarded headers keep the OIDC redirect URI on https.
         .WithEnvironment("ASPNETCORE_FORWARDEDHEADERS_ENABLED", "true")
+        // Saved scans, users.json, the audit log, and Data Protection keys live on the Azure Files volume mounted at /data.
+        // Aspire 13.6 cannot declare volumes on projects, so the mount is set up once per environment (see Docs/persistence-and-user-management-plan.md 4.2).
+        .WithEnvironment("Persistence__RootPath", "/data")
+        .WithEnvironment("Persistence__RequirePersistentVolume", "true")
         .PublishAsAzureContainerApp((_, app) =>
         {
-            app.Name = "azinventory-dev";
-            // One replica: sessions, token cache, and Data Protection keys are in memory.
+            app.Name = builder.Configuration["Deployment:WebAppName"] ?? "azinventory-web";
+            // Circuits and the MSAL token cache are per replica, so each user must stay on one replica.
+            app.Configuration.Ingress.StickySessionsAffinity = StickySessionAffinity.Sticky;
             app.Template.Scale.MinReplicas = 1;
             app.Template.Scale.MaxReplicas = 1;
         });
+
+    var allowedTenantIds = builder.Configuration.GetSection("Security:AllowedTenantIds").Get<string[]>() ?? [];
+    for (var i = 0; i < allowedTenantIds.Length; i++)
+    {
+        web.WithEnvironment($"Security__AllowedTenantIds__{i}", allowedTenantIds[i]);
+    }
 }
 else
 {
