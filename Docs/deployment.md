@@ -41,7 +41,7 @@ git config core.hooksPath .githooks
 git config user.email "<personal-or-github-noreply-address>"
 ```
 
-The pre-commit hook runs gitleaks on staged changes. It uses `.gitleaks.private.toml` when present (which adds the organization's identifier rule) and `.gitleaks.toml` otherwise.
+The pre-commit hook runs gitleaks on staged changes, and the pre-push hook runs it on the commits about to be pushed. Both use `.gitleaks.private.toml` when present (which adds the organization's identifier rule) and `.gitleaks.toml` otherwise. There is no GitHub CI, so these hooks are the only leak check: keep them enabled.
 
 ## Publishing
 

@@ -20,7 +20,7 @@ The pattern used here is the standard "public core, private overlay" approach us
 | Org-specific docs | Sanitize the public docs with placeholders. Move the org-specific runbook content into `ORG-RUNBOOK.md` in the private bundle. |
 | Second allowed tenant and its personal test domain | Treat as confidential. Remove from the public repo; move to `appsettings.Org.json`. |
 | Pending uncommitted feature work | Sanitize everything, then commit all pending work to `main` in logical commits. |
-| Leak prevention | gitleaks pre-commit hook and CI check with a private org-identifier rule. GitHub secret scanning and push protection once the repo is public. |
+| Leak prevention | gitleaks pre-commit and pre-push hooks with a private org-identifier rule. GitHub CI is not used. GitHub secret scanning and push protection once the repo is public. |
 | Repository visibility | Private today. It becomes public only after the go-public gate in section 10 passes. |
 | `.gitignore` | Uses only **generic** names (`appsettings.Org.json`, `/private/`, `.gitleaks.private.toml`). The org name must not appear in `.gitignore`, file names, branch names, or commit messages. |
 
@@ -67,7 +67,7 @@ Values that are **not** org identifiers and stay as they are:
 | Support contact | Web app (`UserManagement:SupportContact`) | `appsettings.Org.json` |
 | Subscription, resource group, environment, registry, app names, identity names | Manual deployment | `appsettings.Org.json` (`Deployment` section) |
 | Storage account, file share, subnet, federated credential names, known deployment quirks, current user list | Operators | `ORG-RUNBOOK.md` |
-| Org identifier deny list | gitleaks | `.gitleaks.private.toml` locally, `ORG_DENYLIST_REGEX` GitHub Actions secret in CI |
+| Org identifier deny list | gitleaks pre-commit and pre-push hooks | `.gitleaks.private.toml` (git-ignored, in the private bundle) |
 | Client IDs and secrets for local development | AppHost and web app | Unchanged: user secrets or the existing git-ignored `appsettings.Local.json` |
 
 The running org deployment already holds its runtime values as container app environment variables. Image-only updates keep them, so **nothing in Azure has to change** for this work.
@@ -83,7 +83,7 @@ flowchart LR
         Base["appsettings.json files with empty or placeholder values"]
         Sample["AppHost appsettings.Org.sample.json"]
         Script["deploy/Publish-AzInventory.ps1"]
-        Guard[".gitleaks.toml, .githooks/pre-commit, leak-scan workflow"]
+        Guard[".gitleaks.toml, .githooks pre-commit and pre-push"]
         Docs["Sanitized docs"]
     end
 
@@ -99,10 +99,6 @@ flowchart LR
         LocalRunbook["private/ORG-RUNBOOK.md"]
     end
 
-    subgraph GH["GitHub settings, not in the repo"]
-        Secret["Actions secret ORG_DENYLIST_REGEX"]
-    end
-
     subgraph Azure["Org Azure subscription"]
         ACR["Container registry"]
         Web["Web container app and its env vars"]
@@ -115,8 +111,7 @@ flowchart LR
     Sample -.->|"template for"| OrgJson
     LocalOrg -->|"read by"| Script
     LocalOrg -->|"read by AppHost"| Code
-    LocalToml -->|"extends"| Guard
-    Secret -->|"used by CI"| Guard
+    LocalToml -->|"used by"| Guard
     Script -->|"push image"| ACR
     Script -->|"update image and env vars"| Web
     Script -->|"update image"| Mcp
@@ -135,7 +130,7 @@ flowchart LR
 | `.gitleaks.toml` | Yes | Public gitleaks rules (defaults plus allowlist) |
 | `.gitleaks.private.toml` | **No** | Extends the public config with the org identifier rule |
 | `.githooks/pre-commit` | Yes | Runs gitleaks on staged changes |
-| `.github/workflows/leak-scan.yml` | Yes | Runs gitleaks in CI, adding the org rule from a secret |
+| `.githooks/pre-push` | Yes | Runs gitleaks on the commits about to be pushed |
 | `private/ORG-RUNBOOK.md` | **No** | Local copy of the org runbook |
 | `Docs/deployment.md` | Yes | Generic deployment guide with placeholders (content moved out of the persistence plan) |
 
@@ -309,10 +304,9 @@ flowchart TD
     Build -->|"No"| FixBuild["Fix and re-run"]
     FixBuild --> Build
     Build -->|"Yes"| Commit["Commit in logical commits"]
-    Commit --> Push["Push to main"]
-    Push --> CI{"Leak-scan workflow green?"}
-    CI -->|"No"| Fix
-    CI -->|"Yes"| Done["Ready for go-public gate"]
+    Commit --> Push{"Pre-push hook clean?"}
+    Push -->|"No"| Fix
+    Push -->|"Yes"| Done["Pushed to main, ready for go-public gate"]
 ```
 
 ### 7.2 Placeholder map for docs
@@ -371,16 +365,17 @@ See open decision D1 for when to publish it.
 flowchart LR
     Dev["Developer edits files"] --> Hook["Pre-commit hook: gitleaks on staged changes"]
     Hook -->|"blocked"| Dev
-    Hook -->|"clean"| Push["git push"]
-    Push --> GHPP["GitHub push protection for real credentials"]
+    Hook -->|"clean"| PrePush["Pre-push hook: gitleaks on outgoing commits"]
+    PrePush -->|"blocked"| Dev
+    PrePush -->|"clean"| GHPP["GitHub push protection for real credentials"]
     GHPP -->|"blocked"| Dev
-    GHPP -->|"accepted"| CI["leak-scan workflow on push and PR"]
-    CI -->|"failed"| Alert["Fix forward or revert"]
-    CI -->|"passed"| Main["main branch"]
+    GHPP -->|"accepted"| Main["main branch"]
     Main --> GHSS["GitHub secret scanning alerts"]
 ```
 
-The org identifier rule must never be committed, because the rule itself would contain the identifiers. It exists only in the git-ignored `.gitleaks.private.toml` and in the `ORG_DENYLIST_REGEX` Actions secret. GitHub masks secret values in workflow logs, and `--redact` stops gitleaks from printing the match.
+The org identifier rule must never be committed, because the rule itself would contain the identifiers. It exists only in the git-ignored `.gitleaks.private.toml`, which developers get from the private bundle. `--redact` stops gitleaks from printing the match.
+
+GitHub CI is not used, so the hooks are the only place the org rule runs. The pre-push hook is the last check before anything reaches GitHub; it also catches commits made with the pre-commit hook bypassed.
 
 ### 8.2 gitleaks configuration
 
@@ -419,11 +414,11 @@ Notes:
 
 - Build the regex from every value in the private bundle. Escape dots. Use whole GUIDs, not prefixes, to avoid false positives.
 - When `.gitleaks.toml` changes, copy the change into `.gitleaks.private.toml`.
-- Pin a gitleaks version (currently 8.30.1) on developer machines and in CI.
+- Pin a gitleaks version (currently 8.30.1) on developer machines.
 
-### 8.3 Pre-commit hook
+### 8.3 Hooks
 
-`.githooks/pre-commit` (tracked, runs under Git for Windows' bundled shell):
+`.githooks/pre-commit` (tracked, runs under Git for Windows' bundled shell) scans staged changes:
 
 ```sh
 #!/bin/sh
@@ -438,72 +433,23 @@ fi
 gitleaks git --pre-commit --staged --redact --no-banner --config "$config"
 ```
 
-Each developer enables it once per clone:
+`.githooks/pre-push` (tracked) scans exactly the commits about to be pushed, for each pushed branch:
+
+- Existing remote branch: the range `<remote tip>..<local tip>`.
+- New branch, or a remote tip that is not known locally (for example after a history rewrite): every commit not already on that remote.
+- Without `.gitleaks.private.toml` it warns and scans with the generic rules only.
+
+Each developer enables both hooks once per clone:
 
 ```powershell
 git config core.hooksPath .githooks
 ```
 
-External contributors are not forced to use the hook; CI covers them.
+External contributors' pull requests are not scanned by the org rule, so review them before merging.
 
-### 8.4 CI workflow
+### 8.4 GitHub CI
 
-`.github/workflows/leak-scan.yml` (tracked):
-
-```yaml
-name: Leak scan
-
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-
-permissions:
-  contents: read
-
-jobs:
-  gitleaks:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install gitleaks
-        env:
-          GITLEAKS_VERSION: "8.30.1"
-        run: |
-          curl -sSfL -o gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          tar -xzf gitleaks.tgz gitleaks
-
-      - name: Add org rule when the secret is available
-        env:
-          ORG_DENYLIST_REGEX: ${{ secrets.ORG_DENYLIST_REGEX }}
-        run: |
-          # Appended to a copy, not extended: an extended config does not inherit the allowlists.
-          cp .gitleaks.toml "$RUNNER_TEMP/gitleaks-ci.toml"
-          if [ -n "$ORG_DENYLIST_REGEX" ]; then
-            {
-              echo ''
-              echo '[[rules]]'
-              echo 'id = "org-identifier"'
-              echo 'description = "Identifier of the hosting organization"'
-              printf "regex = '''%s'''\n" "$ORG_DENYLIST_REGEX"
-            } >> "$RUNNER_TEMP/gitleaks-ci.toml"
-          fi
-          echo "GITLEAKS_CONFIG_PATH=$RUNNER_TEMP/gitleaks-ci.toml" >> "$GITHUB_ENV"
-
-      - name: Scan
-        run: ./gitleaks git --redact --no-banner --config "$GITLEAKS_CONFIG_PATH" .
-```
-
-Notes:
-
-- `ORG_DENYLIST_REGEX` holds the same regex as `.gitleaks.private.toml`, without the TOML quoting.
-- The scan covers the full history, so add the secret only **after** the history cleanup in section 10.3; otherwise every run fails on the one historical finding.
-- Secrets are not passed to workflows triggered by pull requests from forks. Those runs use the public rules only, so maintainers still review external PRs.
-- Pin `actions/checkout` to a commit SHA if the repo adopts SHA pinning.
-- After the repo is public, make `gitleaks` a required status check on `main`.
+Not used. The hooks above replace the earlier `leak-scan` GitHub Actions workflow and its `ORG_DENYLIST_REGEX` secret, which were removed.
 
 ### 8.5 GitHub settings (after the repo becomes public)
 
@@ -513,7 +459,7 @@ Notes:
 | Push protection | Same page | On |
 | Custom secret scanning pattern for the org rule | Same page | Needs GitHub Secret Protection, which applies to organization-owned repos. This repo is owned by a personal account, so gitleaks enforces the org rule instead. Add the custom pattern if the repo moves to a GitHub organization with Secret Protection |
 | Dependabot alerts | Same page | On |
-| Branch protection on `main` | Settings, Branches | Require the `gitleaks` check; block force pushes |
+| Branch protection on `main` | Settings, Branches | Block force pushes (after the history cleanup) |
 | Keep my email private and block pushes that expose it | Each contributor's GitHub email settings | On |
 
 ### 8.6 Commit identity
@@ -626,7 +572,6 @@ flowchart TD
     E1 --> E
     E -->|"Yes"| F["Change visibility to public"]
     F --> G["Enable secret scanning, push protection, Dependabot, branch protection"]
-    G --> H["Add ORG_DENYLIST_REGEX secret if not already present"]
 ```
 
 Gate commands, run from the repo root with the private rule present:
@@ -679,15 +624,15 @@ Add a short, generic version of this list to `Docs/deployment.md` ("If you deplo
 | 7 | `Publish-AzInventory.ps1 -WhatIf` | Planned env vars equal the live app's env vars |
 | 8 | Real publish to the org environment | New revision healthy; sign-in, admin users page, saved scans, chat, graph, and tags all work |
 | 9 | Commit a test file containing an org identifier with the hook on | Commit blocked |
-| 10 | Push a branch with an org identifier (in a private test) | `leak-scan` workflow fails |
+| 10 | Push a branch with an org identifier (throwaway local branch) | Pre-push hook blocks the push |
 | 11 | `dotnet test BlazorAzureInventory.Tests` | All tests pass with fake tenant IDs |
 
 ## 13. Risks and Mitigations
 
 | Risk | Mitigation |
 |---|---|
-| A colleague commits an org value in a new file | Pre-commit hook, CI check, required status check on `main` |
-| The deny list itself leaks | Kept only in a git-ignored file and an Actions secret; `--redact` on all scans |
+| A colleague commits an org value in a new file | Pre-commit and pre-push hooks with the private rule |
+| The deny list itself leaks | Kept only in a git-ignored file in the private bundle; `--redact` on all scans |
 | A colleague loses the org file and deploys with generic defaults | The script refuses to run with missing or placeholder values; `-WhatIf` shows the env var diff first |
 | Generic AppHost default opens sign-in to all tenants in a fresh public deployment | Documented in the README and `SecurityReview.md` (SEC-002). Optional follow-up: log a warning in publish mode when `Security:AllowedTenantIds` is empty |
 | Publishing the security review exposes open findings | Decision D1 |

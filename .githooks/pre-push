@@ -1,0 +1,28 @@
+#!/bin/sh
+# Scans the commits about to be pushed. Uses the org rule when .gitleaks.private.toml is present.
+remote="$1"
+config=.gitleaks.toml
+if [ -f .gitleaks.private.toml ]; then
+  config=.gitleaks.private.toml
+else
+  echo "pre-push: .gitleaks.private.toml not found; scanning with the generic rules only."
+fi
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "gitleaks is not installed. Install it (winget install Gitleaks.Gitleaks) or bypass this hook at your own risk."
+  exit 1
+fi
+
+zero=0000000000000000000000000000000000000000
+status=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue
+  # New branch, or a remote tip that is not known locally (for example after a history rewrite).
+  if [ "$remote_sha" = "$zero" ] || ! git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+    range="$local_sha --not --remotes=$remote"
+  else
+    range="$remote_sha..$local_sha"
+  fi
+  gitleaks git --redact --no-banner --config "$config" --log-opts="$range" . </dev/null || status=1
+done
+exit $status

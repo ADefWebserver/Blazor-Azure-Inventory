@@ -100,7 +100,7 @@ These items were deliberately left out of the findings, severity counts, and rem
 
 | # | Exclusion | Reason |
 |---|---|---|
-| EX-1 | Secrets, API keys, connection strings, and credentials stored in `appsettings*.json`, `launchSettings.json`, and other configuration files (for example `AzureAd:ClientCredentials`, `AI:DefaultProvider:ApiKey`, AppHost parameters) | **Superseded 2026-10-11:** the repository is being made public. Committed configuration holds placeholders only; secrets live in user secrets, the git-ignored `appsettings.Local.json`, environment variables, or managed identity, and deployment-specific values in the git-ignored `appsettings.Org.json`. gitleaks enforces this in a pre-commit hook and in CI. |
+| EX-1 | Secrets, API keys, connection strings, and credentials stored in `appsettings*.json`, `launchSettings.json`, and other configuration files (for example `AzureAd:ClientCredentials`, `AI:DefaultProvider:ApiKey`, AppHost parameters) | **Superseded 2026-10-11:** the repository is being made public. Committed configuration holds placeholders only; secrets live in user secrets, the git-ignored `appsettings.Local.json`, environment variables, or managed identity, and deployment-specific values in the git-ignored `appsettings.Org.json`. gitleaks enforces this in pre-commit and pre-push hooks. |
 | EX-2 | Test project `BlazorAzureInventory.Tests` as a runtime attack surface | Not deployed. Only its dependencies are reported (SEC-019). |
 | EX-3 | Build output folders (`bin/`, `obj/`, `publish/`) | Generated artifacts. |
 
