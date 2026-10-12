@@ -364,3 +364,8 @@ MigrationBackup/
 FodyWeavers.xsd
 # Local development settings
 BlazorAzureInventory/appsettings.Development.json
+
+# Organization-specific deployment settings, shared privately and never committed
+appsettings.Org.json
+/private/
+.gitleaks.private.toml

@@ -1,0 +1,10 @@
+#!/bin/sh
+config=.gitleaks.toml
+[ -f .gitleaks.private.toml ] && config=.gitleaks.private.toml
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "gitleaks is not installed. Install it (winget install Gitleaks.Gitleaks) or bypass this hook at your own risk."
+  exit 1
+fi
+
+gitleaks git --pre-commit --staged --redact --no-banner --config "$config"

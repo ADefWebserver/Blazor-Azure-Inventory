@@ -1,0 +1,44 @@
+name: Leak scan
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+        run: |
+          curl -sSfL -o gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf gitleaks.tgz gitleaks
+
+      - name: Add org rule when the secret is available
+        env:
+          ORG_DENYLIST_REGEX: ${{ secrets.ORG_DENYLIST_REGEX }}
+        run: |
+          # Appended to a copy, not extended: an extended config does not inherit the allowlists.
+          cp .gitleaks.toml "$RUNNER_TEMP/gitleaks-ci.toml"
+          if [ -n "$ORG_DENYLIST_REGEX" ]; then
+            {
+              echo ''
+              echo '[[rules]]'
+              echo 'id = "org-identifier"'
+              echo 'description = "Identifier of the hosting organization"'
+              printf "regex = '''%s'''\n" "$ORG_DENYLIST_REGEX"
+            } >> "$RUNNER_TEMP/gitleaks-ci.toml"
+          fi
+          echo "GITLEAKS_CONFIG_PATH=$RUNNER_TEMP/gitleaks-ci.toml" >> "$GITHUB_ENV"
+
+      - name: Scan
+        run: ./gitleaks git --redact --no-banner --config "$GITLEAKS_CONFIG_PATH" .

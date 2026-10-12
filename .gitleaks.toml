@@ -1,0 +1,13 @@
+title = "Blazor Azure Inventory"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Vendored minified libraries"
+paths = ['''BlazorAzureInventory/wwwroot/lib/''']
+
+[[allowlists]]
+description = "Fake keys and tokens in unit tests"
+targetRules = ["generic-api-key", "jwt"]
+paths = ['''BlazorAzureInventory\.Tests/''']
