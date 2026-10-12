@@ -1,0 +1,54 @@
+@if (Changes is null)
+{
+    <RadzenAlert AlertStyle="AlertStyle.Info" Shade="Shade.Lighter" AllowClose="false">
+        Changes appear after your second scan: each refresh is compared with the scan before it.
+    </RadzenAlert>
+}
+else if (Changes.TotalCount == 0)
+{
+    <RadzenAlert AlertStyle="AlertStyle.Success" Shade="Shade.Lighter" AllowClose="false">
+        No changes since the previous scan on @Changes.PreviousScannedUtc.ToString("yyyy-MM-dd HH:mm 'UTC'").
+    </RadzenAlert>
+}
+else
+{
+    <RadzenStack Gap="0.5rem">
+        <RadzenText TextStyle="TextStyle.Body2" class="muted rz-m-0">
+            Compared with the scan on @Changes.PreviousScannedUtc.ToString("yyyy-MM-dd HH:mm 'UTC'"), for subscriptions present in both scans.
+        </RadzenText>
+        <RadzenDataGrid Data="@_rows" TItem="Row" AllowFiltering="true" AllowSorting="true" AllowPaging="true" PageSize="25"
+                        FilterMode="FilterMode.Simple" Density="Density.Compact">
+            <Columns>
+                <RadzenDataGridColumn TItem="Row" Property="Change" Title="Change" Width="170px">
+                    <Template Context="r">
+                        <RadzenBadge BadgeStyle="@r.Style" Shade="Shade.Lighter" Text="@r.Change" />
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="Row" Property="Name" Title="Resource" Width="220px" />
+                <RadzenDataGridColumn TItem="Row" Property="Kind" Title="Kind" Width="160px" />
+                <RadzenDataGridColumn TItem="Row" Property="Details" Title="Details">
+                    <Template Context="r"><span style="white-space: normal;">@r.Details</span></Template>
+                </RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+    </RadzenStack>
+}
+
+@code {
+    [Parameter] public SnapshotDiff? Changes { get; set; }
+
+    private List<Row> _rows = new();
+
+    protected override void OnParametersSet()
+    {
+        if (Changes is null) { _rows = new(); return; }
+        _rows = Changes.Added.Select(r => new Row("Added", r.Name, r.Kind.ToString(), r.ResourceGroup, BadgeStyle.Success))
+            .Concat(Changes.Removed.Select(r => new Row("Removed", r.Name, r.Kind.ToString(), r.ResourceGroup, BadgeStyle.Danger)))
+            .Concat(Changes.Changed.Select(c => new Row("Changed", c.Name, c.Kind.ToString(), string.Join("; ", c.Changes), BadgeStyle.Warning)))
+            .Concat(Changes.ConnectionsAdded.Select(c => new Row("Connection added", c.SourceLabel, c.Type, $"-> {c.TargetLabel}", BadgeStyle.Info)))
+            .Concat(Changes.ConnectionsRemoved.Select(c => new Row("Connection removed", c.SourceLabel, c.Type, $"-> {c.TargetLabel}", BadgeStyle.Secondary)))
+            .ToList();
+    }
+
+    private sealed record Row(string Change, string Name, string Kind, string Details, BadgeStyle Style);
+}

@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace BlazorAzureInventory.Models.Configuration;
 
 public enum ConfigSource
@@ -29,6 +31,7 @@ public sealed record ConnectionReference(
     string? ResolvedResourceId)
 {
     /// <summary>Identifier-only description, e.g. "contoso-sql.database.windows.net / orders".</summary>
+    [JsonIgnore]
     public string TargetDisplay
     {
         get
@@ -71,6 +74,7 @@ public sealed record AppConfigAnalysis(
 {
     public IReadOnlyList<ImageReference> Images { get; init; } = [];
 
+    [JsonIgnore]
     public int ConnectionCount => Entries
         .Where(e => !e.IsOverridden)
         .SelectMany(e => e.References)

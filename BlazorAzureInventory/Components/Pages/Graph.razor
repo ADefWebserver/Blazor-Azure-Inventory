@@ -2,8 +2,13 @@
 @attribute [Authorize]
 @implements IDisposable
 @using BlazorAzureInventory.Components.Graph
+@using BlazorAzureInventory.Services.Persistence
 @using BlazorAzureInventory.Services.Scan
 @inject InventorySessionStore Store
+@inject InventorySessionLoader Loader
+@inject UserPreferencesService Preferences
+@inject BlazorAzureInventory.Services.Changes.ChangeTrackingService ChangeTracking
+@inject BlazorAzureInventory.Services.Reports.FileDownloadService Downloads
 @inject UserContextAccessor UserContext
 @inject GraphQueryService GraphQueries
 @inject InventoryScanOrchestrator Orchestrator
@@ -20,9 +25,17 @@
         </RadzenStack>
         @if (_graph is not null)
         {
-            <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">
-                Generated @_graph.GeneratedUtc.ToString("yyyy-MM-dd HH:mm 'UTC'") • @_graph.ScopeDescription
-            </RadzenText>
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.75rem">
+                <ScanAgeBadge Snapshot="@_snapshot" Source="@_source" ShowNever="false" />
+                <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">@_graph.ScopeDescription</RadzenText>
+                @if (_changes is { TotalCount: > 0 })
+                {
+                    <RadzenButton Text="@(_showChanges ? "Hide changes" : $"Show changes ({_changes.TotalCount})")" Icon="difference" Size="ButtonSize.Small"
+                                  ButtonStyle="ButtonStyle.Light" Click="@ToggleChangesAsync"
+                                  title="Outline resources added (green) or changed (orange) since the previous scan" />
+                }
+                <RadzenButton Text="Export JSON" Icon="download" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@ExportJsonAsync" />
+            </RadzenStack>
         }
     </RadzenStack>
 
@@ -66,6 +79,10 @@
     private GraphCanvas? _canvas;
     private string? _pendingFocus;
     private string? _sessionKey;
+    private InventorySnapshot? _snapshot;
+    private SessionDataSource? _source;
+    private SnapshotDiff? _changes;
+    private bool _showChanges;
     private readonly GraphFilterState _filter = new()
     {
         NodeTypes = NodeTypeStyles.All.Select(t => t.Type).Where(t => !NodeTypeStyles.HiddenByDefault.Contains(t)).ToList()
@@ -75,10 +92,29 @@
     {
         var user = await UserContext.GetUserAsync();
         _sessionKey = InventorySessionStore.KeyFor(user);
-        var session = Store.Get(user);
+        var session = await Loader.EnsureLoadedAsync();
+        _snapshot = session?.Snapshot;
+        _source = session?.Source;
+        RestoreFilter((await Preferences.GetAsync()).GraphFilter);
         Load(session?.Graph, session?.Index);
+        _changes = await ChangeTracking.GetChangesAsync();
         _pendingFocus = Focus;
         Store.TagsChanged += OnTagsChanged;
+    }
+
+    private void RestoreFilter(GraphFilterState? saved)
+    {
+        if (saved is null) return;
+        var known = NodeTypeStyles.All.Select(t => t.Type).ToHashSet(StringComparer.Ordinal);
+        _filter.NodeTypes = saved.NodeTypes.Where(known.Contains).ToList();
+        _filter.Subscriptions = saved.Subscriptions.ToList();
+        _filter.ResourceGroups = saved.ResourceGroups.ToList();
+        _filter.OnlyConnected = saved.OnlyConnected;
+        _filter.HideExternal = saved.HideExternal;
+        _filter.HideEmulator = saved.HideEmulator;
+        _filter.ShowLowConfidence = saved.ShowLowConfidence;
+        _filter.TagName = saved.TagName is { Length: <= 512 } name ? name : null;
+        _filter.TagValue = saved.TagValue is { Length: <= 256 } value ? value : null;
     }
 
     private void Load(GraphDocument? graph, GraphIndex? index)
@@ -93,6 +129,18 @@
     private async Task ApplyFilterAsync()
     {
         if (_canvas is not null) await _canvas.ApplyFilterAsync(_filter);
+        await Preferences.UpdateAsync(p => p.GraphFilter = new GraphFilterState
+        {
+            NodeTypes = _filter.NodeTypes.ToList(),
+            Subscriptions = _filter.Subscriptions.ToList(),
+            ResourceGroups = _filter.ResourceGroups.ToList(),
+            OnlyConnected = _filter.OnlyConnected,
+            HideExternal = _filter.HideExternal,
+            HideEmulator = _filter.HideEmulator,
+            ShowLowConfidence = _filter.ShowLowConfidence,
+            TagName = _filter.TagName,
+            TagValue = _filter.TagValue
+        });
     }
 
     private async Task FindNodeAsync(string id)
@@ -134,11 +182,32 @@
 
     private async Task OnRenderedAsync()
     {
+        if (_showChanges) await ApplyChangeHighlightAsync();
         if (_pendingFocus is { } focus)
         {
             _pendingFocus = null;
             await FindNodeAsync(focus);
         }
+    }
+
+    private async Task ToggleChangesAsync()
+    {
+        _showChanges = !_showChanges;
+        await ApplyChangeHighlightAsync();
+    }
+
+    private Task ApplyChangeHighlightAsync() =>
+        _canvas is null ? Task.CompletedTask
+            : _showChanges && _changes is not null
+                ? _canvas.HighlightChangesAsync(_changes.AddedIds, _changes.ChangedIds)
+                : _canvas.HighlightChangesAsync([], []);
+
+    private async Task ExportJsonAsync()
+    {
+        if (_graph is null) return;
+        using var content = new MemoryStream();
+        await System.Text.Json.JsonSerializer.SerializeAsync(content, _graph, GraphJson.Options);
+        await Downloads.DownloadAsync($"inventory-graph-{DateTime.UtcNow:yyyyMMdd-HHmm}.json", "application/json", content);
     }
 
     private async Task RebuildAsync()

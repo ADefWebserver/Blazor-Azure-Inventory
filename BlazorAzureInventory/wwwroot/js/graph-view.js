@@ -93,6 +93,23 @@ export function updateNodeTags(id, tags) {
     if (lastFilter) applyFilter(lastFilter);
 }
 
+// Outlines nodes added (green) or changed (orange) since the previous scan; empty lists restore the normal style.
+export function highlightChanges(addedIds, changedIds) {
+    const added = new Set((addedIds ?? []).map(id => id.toLowerCase()));
+    const changed = new Set((changedIds ?? []).map(id => id.toLowerCase()));
+    const shadow = rawNodes.length <= SHADOW_NODE_LIMIT;
+    nodes.update(rawNodes.map(n => {
+        const node = toVisNode(n, shadow);
+        const key = String(n.id).toLowerCase();
+        const border = added.has(key) ? '#16a34a' : changed.has(key) ? '#ea580c' : null;
+        if (border) {
+            node.borderWidth = 4;
+            node.color = { ...node.color, border };
+        }
+        return node;
+    }));
+}
+
 function matchesTag(n, tagName, tagValue) {
     const tags = n.data?.tags;
     if (!tags) return false;

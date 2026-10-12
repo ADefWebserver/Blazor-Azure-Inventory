@@ -7,6 +7,7 @@ using BlazorAzureInventory.Services.Analysis;
 using BlazorAzureInventory.Services.Auth;
 using BlazorAzureInventory.Services.Azure;
 using BlazorAzureInventory.Services.Graph;
+using BlazorAzureInventory.Services.Persistence;
 using Microsoft.Extensions.Options;
 
 namespace BlazorAzureInventory.Services.Scan;
@@ -20,15 +21,23 @@ public sealed class InventoryScanOrchestrator(
     InventoryGraphBuilder graphBuilder,
     InventorySessionStore store,
     UserContextAccessor userContext,
+    IUserDataStore dataStore,
+    Quotas.UserQuotaService quotas,
     IOptions<InventoryOptions> options,
     ILogger<InventoryScanOrchestrator> logger)
 {
+    private static readonly TimeSpan SaveTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>Why the last scan could not be saved, or null when it was saved (or saving is unavailable).</summary>
+    public string? LastSaveError { get; private set; }
+
     public async Task<InventorySnapshot> ScanAsync(ScanRequest request, IProgress<ScanProgress> progress, CancellationToken ct)
     {
         var opts = options.Value;
         var issues = new ConcurrentBag<ScanIssue>();
         var parallel = new ParallelOptions { MaxDegreeOfParallelism = opts.MaxParallelism, CancellationToken = ct };
         var user = await userContext.GetUserAsync();
+        using var slot = quotas.TryStartScan(user, out var denied) ?? throw new Quotas.QuotaExceededException(denied.Message!);
         logger.LogInformation("Scan started for {SubscriptionCount} subscriptions in {TenantCount} tenants",
             request.Subscriptions.Count, request.Tenants.Count);
 
@@ -162,12 +171,32 @@ public sealed class InventoryScanOrchestrator(
         session.Snapshot = snapshot;
         session.Graph = graph;
         session.Index = new GraphIndex(graph);
+        session.Source = SessionDataSource.Scan;
+        session.HiddenSubscriptions = 0;
         store.Set(user, session);
         progress.Report(new ScanProgress(stage, 1, 1, null));
 
         logger.LogInformation("Scan completed: {ResourceCount} resources, {AppCount} apps analyzed, {IssueCount} issues, {NodeCount} nodes, {EdgeCount} edges",
             snapshot.Resources.Count, snapshot.AppConfigs.Count, snapshot.Issues.Count, graph.Nodes.Count, graph.Edges.Count);
+        await SaveAsync(user, snapshot);
         return snapshot;
+    }
+
+    private async Task SaveAsync(System.Security.Claims.ClaimsPrincipal user, InventorySnapshot snapshot)
+    {
+        LastSaveError = null;
+        if (!dataStore.IsPersistent || UserKey.FromPrincipal(user) is not { } key) return;
+        using var cts = new CancellationTokenSource(SaveTimeout);
+        try
+        {
+            await dataStore.SaveSnapshotAsync(key, snapshot, rotate: true, cts.Token);
+        }
+        catch (Exception ex)
+        {
+            // A failed save never fails the scan; the result stays in memory for this session.
+            logger.LogWarning("Saving the scan for {UserKey} failed ({ExceptionType})", key, ex.GetType().Name);
+            LastSaveError = ex is SnapshotTooLargeException ? ex.Message : "The scan could not be saved and is kept for this session only.";
+        }
     }
 
     /// <summary>Re-runs the graph builder from the cached snapshot without rescanning.</summary>

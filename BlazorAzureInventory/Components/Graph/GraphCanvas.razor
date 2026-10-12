@@ -114,6 +114,11 @@
         if (_module is not null) await _module.InvokeVoidAsync("updateNodeTags", id, tags);
     }
 
+    public async Task HighlightChangesAsync(IEnumerable<string> addedIds, IEnumerable<string> changedIds)
+    {
+        if (_module is not null) await _module.InvokeVoidAsync("highlightChanges", addedIds, changedIds);
+    }
+
     public async ValueTask DisposeAsync()
     {
         try

@@ -53,8 +53,84 @@ public sealed class GraphSessionOptions
 public sealed class SecurityOptions
 {
     public string[] AllowedTenantIds { get; set; } = [];
+
+    /// <summary>Legacy allow-list; only read once to seed the user directory.</summary>
     public bool UsernameAllowListEnabled { get; set; }
+
+    /// <summary>Legacy allow-list; only read once to seed the user directory.</summary>
     public string AllowedUsernames { get; set; } = string.Empty;
+}
+
+public sealed class PersistenceOptions
+{
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>Root folder for saved data. Empty uses %LOCALAPPDATA%/BlazorAzureInventory/data.</summary>
+    public string RootPath { get; set; } = "";
+
+    /// <summary>When true, saving is disabled unless <see cref="RootPath"/> is on a mounted network share.</summary>
+    public bool RequirePersistentVolume { get; set; }
+
+    [Range(1, 1024)] public int MaxSnapshotMegabytes { get; set; } = 50;
+    [Range(1, 8760)] public int StaleAfterHours { get; set; } = 24;
+    public bool KeepPreviousSnapshot { get; set; } = true;
+    [Range(1, 3650)] public int RetentionDays { get; set; } = 90;
+    [Range(1, 3650)] public int AuditRetentionDays { get; set; } = 365;
+    [Range(1, 168)] public int CleanupIntervalHours { get; set; } = 24;
+}
+
+public sealed class UserManagementOptions
+{
+    /// <summary>Comma-separated usernames that are always administrators and cannot be changed in the UI.</summary>
+    public string BootstrapAdmins { get; set; } = "";
+    public bool MigrateLegacyAllowList { get; set; } = true;
+    [Range(5, 3600)] public int DirectoryRefreshSeconds { get; set; } = 60;
+    [Range(1, 60)] public int RevalidationMinutes { get; set; } = 5;
+    [Range(1, 100000)] public int MaxUsers { get; set; } = 1000;
+    public string SupportContact { get; set; } = "";
+}
+
+public sealed class QuotaOptions
+{
+    public bool AdminsExempt { get; set; }
+    public ScanQuotaOptions Scans { get; set; } = new();
+    public ReportQuotaOptions Reports { get; set; } = new();
+    public ChatQuotaOptions Chat { get; set; } = new();
+    public HttpQuotaOptions Http { get; set; } = new();
+}
+
+public sealed class ScanQuotaOptions
+{
+    [Range(1, 1000)] public int PerUserPerHour { get; set; } = 6;
+    [Range(1, 10)] public int MaxConcurrentPerUser { get; set; } = 1;
+    [Range(1, 100)] public int MaxConcurrentGlobal { get; set; } = 3;
+}
+
+public sealed class ReportQuotaOptions
+{
+    [Range(1, 1000)] public int PerUserPerHour { get; set; } = 10;
+    [Range(1000, 1_048_575)] public int MaxRows { get; set; } = 200_000;
+}
+
+public sealed class ChatQuotaOptions
+{
+    [Range(1, 1000)] public int TurnsPerUserPer10Minutes { get; set; } = 30;
+    [Range(1000, 100_000_000)] public long DefaultProviderTokensPerUserPerDay { get; set; } = 200_000;
+}
+
+public sealed class HttpQuotaOptions
+{
+    [Range(1, 10000)] public int AnonymousPerIpPerMinute { get; set; } = 20;
+    [Range(1, 10000)] public int AuthenticatedPerUserPerMinute { get; set; } = 30;
+}
+
+public sealed class ChangeTrackingOptions
+{
+    /// <summary>Property keys ignored when comparing scans because they change on every read.</summary>
+    public string[] IgnoredProperties { get; set; } = [];
+
+    public IReadOnlyList<string> EffectiveIgnoredProperties =>
+        IgnoredProperties.Length > 0 ? IgnoredProperties : ["lastModifiedTime", "lastModified", "provisioningState"];
 }
 
 public sealed class AIOptions

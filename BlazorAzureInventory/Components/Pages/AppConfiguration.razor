@@ -1,8 +1,7 @@
 @page "/appconfiguration"
 @attribute [Authorize]
 @using BlazorAzureInventory.Components.Inventory
-@inject InventorySessionStore Store
-@inject UserContextAccessor UserContext
+@inject BlazorAzureInventory.Services.Persistence.InventorySessionLoader Loader
 @inject NavigationManager Nav
 
 <PageTitle>@(_resource?.Name ?? "App Configuration") - Azure Inventory</PageTitle>
@@ -121,7 +120,7 @@ else
 
     protected override async Task OnParametersSetAsync()
     {
-        _snapshot = Store.Get(await UserContext.GetUserAsync())?.Snapshot;
+        _snapshot = (await Loader.EnsureLoadedAsync())?.Snapshot;
         if (_snapshot is null || string.IsNullOrWhiteSpace(Id)) return;
 
         _resourcesById = _snapshot.Resources.ToDictionary(r => r.Id, StringComparer.OrdinalIgnoreCase);

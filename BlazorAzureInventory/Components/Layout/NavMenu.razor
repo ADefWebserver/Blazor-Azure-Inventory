@@ -15,6 +15,10 @@
                 <RadzenPanelMenuItem Text="AI Chat" Icon="chat" Path="chat" Disabled="@(!_hasScan)"
                                      title="@(_hasScan ? null : "Run a scan first")" />
                 <RadzenPanelMenuItem Text="Settings" Icon="settings" Path="settings" />
+                @if (_isAdmin)
+                {
+                    <RadzenPanelMenuItem Text="Users" Icon="manage_accounts" Path="admin/users" />
+                }
             }
         </RadzenPanelMenu>
     </div>
@@ -29,6 +33,7 @@
 
 @code {
     private bool _signedIn;
+    private bool _isAdmin;
     private bool _hasScan;
     private string? _domain;
     private string? _sessionKey;
@@ -44,6 +49,7 @@
     {
         var user = (await stateTask).User;
         _signedIn = user.Identity?.IsAuthenticated == true;
+        _isAdmin = _signedIn && UserClaims.GetAppRole(user) == BlazorAzureInventory.Models.Users.AppRoles.Admin;
         _sessionKey = _signedIn ? InventorySessionStore.KeyFor(user) : null;
         _hasScan = _signedIn && Store.Get(user)?.Snapshot is not null;
         var upn = user.FindFirst("preferred_username")?.Value;

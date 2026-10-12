@@ -8,7 +8,11 @@ using OpenAI;
 
 namespace BlazorAzureInventory.Services.AI;
 
-public sealed record ChatClientInfo(IChatClient Client, string ModelId, bool SupportsTools, string ProviderName, string Protocol, string OperationUrl);
+public sealed record ChatClientInfo(IChatClient Client, string ModelId, bool SupportsTools, string ProviderName, string Protocol, string OperationUrl)
+{
+    /// <summary>True when the app-owned default provider key is used, which is subject to a daily token allowance.</summary>
+    public bool UsesDefaultKey { get; init; }
+}
 
 /// <summary>Creates an <see cref="IChatClient"/> for the session's active provider. API keys are decrypted only here.</summary>
 public sealed class ChatClientFactory(
@@ -28,7 +32,7 @@ public sealed class ChatClientFactory(
         if (!provider.IsConfigured || string.IsNullOrWhiteSpace(provider.AIModel)) return null;
 
         var key = await settings.GetApiKeyAsync(provider);
-        return string.IsNullOrEmpty(key) ? null : await CreateForAsync(provider, key, ct);
+        return string.IsNullOrEmpty(key) ? null : await CreateForAsync(provider, key, ct) with { UsesDefaultKey = provider.UsesDefaultKey };
     }
 
     public async Task<ChatClientInfo> CreateForAsync(AIProviderSettings p, string apiKey, CancellationToken ct)

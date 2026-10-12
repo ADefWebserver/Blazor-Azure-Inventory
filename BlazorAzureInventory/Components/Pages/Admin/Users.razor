@@ -1,0 +1,204 @@
+@page "/admin/users"
+@attribute [Authorize(Policy = AppPolicies.Admin)]
+@using BlazorAzureInventory.Services.Reports
+@using BlazorAzureInventory.Services.Users
+@inject UserAdminService Admin
+@inject DialogService DialogService
+@inject NotificationService Notifications
+@inject ReportExportService Reports
+@inject FileDownloadService Downloads
+
+<PageTitle>Users - Azure Inventory</PageTitle>
+
+<RadzenStack Gap="1rem">
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" JustifyContent="JustifyContent.SpaceBetween" Wrap="FlexWrap.Wrap" Gap="1rem">
+        <RadzenStack Gap="0">
+            <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1" class="page-title">Users</RadzenText>
+            <RadzenText TextStyle="TextStyle.Body2" class="muted rz-m-0">
+                Who can sign in to this app. App roles do not change anyone's Azure permissions.
+            </RadzenText>
+        </RadzenStack>
+        <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+            <RadzenButton Text="Add users" Icon="person_add" ButtonStyle="ButtonStyle.Primary" Click="@AddUsersAsync" Disabled="@(!Admin.CanWrite)" />
+            <RadzenButton Text="Refresh" Icon="refresh" ButtonStyle="ButtonStyle.Light" Click="@LoadAsync" />
+            <RadzenButton Text="Export to Excel" Icon="download" ButtonStyle="ButtonStyle.Light" Click="@ExportAsync" Disabled="@(_users.Count == 0)" />
+        </RadzenStack>
+    </RadzenStack>
+
+    @if (!Admin.CanWrite)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Warning" Shade="Shade.Lighter" AllowClose="false">
+            Persistent storage is unavailable, so users cannot be changed. Only the administrators configured at deployment can sign in.
+        </RadzenAlert>
+    }
+
+    <RadzenTabs RenderMode="TabRenderMode.Client" Change="@OnTabChangedAsync">
+        <Tabs>
+            <RadzenTabsItem Text="@($"Users ({_users.Count})")" Icon="group">
+                <RadzenDataGrid Data="@_users" TItem="UserRecord" AllowFiltering="true" AllowSorting="true" AllowPaging="true" PageSize="25"
+                                FilterMode="FilterMode.Simple" IsLoading="@_loading" Density="Density.Compact" EmptyText="No users.">
+                    <Columns>
+                        <RadzenDataGridColumn TItem="UserRecord" Property="Username" Title="Username" MinWidth="220px">
+                            <Template Context="u">
+                                @if (u.IsBootstrap)
+                                {
+                                    <RadzenIcon Icon="lock" title="Configured by deployment settings" Style="font-size: 1rem; vertical-align: middle;" />
+                                }
+                                <span class="mono">@u.Username</span>
+                            </Template>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="UserRecord" Property="DisplayName" Title="Display name" />
+                        <RadzenDataGridColumn TItem="UserRecord" Property="Role" Title="Role" Width="110px">
+                            <Template Context="u">
+                                <RadzenBadge BadgeStyle="@(u.Role == AppRoles.Admin ? BadgeStyle.Primary : BadgeStyle.Light)" Text="@u.Role" />
+                            </Template>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="UserRecord" Property="Status" Title="Status" Width="120px">
+                            <Template Context="u">
+                                <RadzenBadge BadgeStyle="@StatusStyle(u.Status)" Text="@u.Status.ToString()" />
+                            </Template>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="UserRecord" Property="TenantId" Title="Tenant" Width="110px">
+                            <Template Context="u"><span class="mono" title="@u.TenantId">@Short(u.TenantId)</span></Template>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="UserRecord" Property="LastSignInUtc" Title="Last sign-in" Width="150px" FormatString="{0:yyyy-MM-dd HH:mm}" />
+                        <RadzenDataGridColumn TItem="UserRecord" Property="AddedBy" Title="Added by" />
+                        <RadzenDataGridColumn TItem="UserRecord" Property="AddedUtc" Title="Added" Width="120px" FormatString="{0:yyyy-MM-dd}" />
+                        <RadzenDataGridColumn TItem="UserRecord" Title="Actions" Width="200px" Sortable="false" Filterable="false">
+                            <Template Context="u">
+                                @if (CanChange(u))
+                                {
+                                    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.25rem">
+                                        <RadzenButton Icon="@(u.Role == AppRoles.Admin ? "person" : "shield_person")" Size="ButtonSize.ExtraSmall" Variant="Variant.Text"
+                                                      title="@(u.Role == AppRoles.Admin ? "Make user" : "Make admin")"
+                                                      Click="@(() => RunAsync(() => Admin.SetRoleAsync(u.Id, u.Role == AppRoles.Admin ? AppRoles.User : AppRoles.Admin), "Role changed"))" />
+                                        <RadzenButton Icon="@(u.Status == UserStatus.Disabled ? "check_circle" : "block")" Size="ButtonSize.ExtraSmall" Variant="Variant.Text"
+                                                      title="@(u.Status == UserStatus.Disabled ? "Enable" : "Disable")"
+                                                      Click="@(() => RunAsync(() => Admin.SetEnabledAsync(u.Id, u.Status == UserStatus.Disabled), u.Status == UserStatus.Disabled ? "User enabled" : "User disabled"))" />
+                                        @if (u.ObjectId is not null)
+                                        {
+                                            <RadzenButton Icon="link_off" Size="ButtonSize.ExtraSmall" Variant="Variant.Text" title="Reset binding"
+                                                          Click="@(() => ConfirmAsync($"Reset the account binding of {u.Username}? They bind again on their next sign-in.", () => Admin.ResetBindingAsync(u.Id), "Binding reset"))" />
+                                        }
+                                        <RadzenButton Icon="delete" Size="ButtonSize.ExtraSmall" Variant="Variant.Text" ButtonStyle="ButtonStyle.Danger" title="Remove"
+                                                      Click="@(() => ConfirmAsync($"Remove {u.Username}? Their saved inventory data is deleted too.", () => Admin.RemoveAsync(u.Id), "User removed"))" />
+                                    </RadzenStack>
+                                }
+                            </Template>
+                        </RadzenDataGridColumn>
+                    </Columns>
+                </RadzenDataGrid>
+            </RadzenTabsItem>
+            <RadzenTabsItem Text="Audit log" Icon="history">
+                <RadzenDataGrid Data="@_audit" TItem="AuditEvent" AllowFiltering="true" AllowSorting="true" AllowPaging="true" PageSize="25"
+                                FilterMode="FilterMode.Simple" Density="Density.Compact" EmptyText="No events in the last two months.">
+                    <Columns>
+                        <RadzenDataGridColumn TItem="AuditEvent" Property="TimestampUtc" Title="Time (UTC)" Width="160px" FormatString="{0:yyyy-MM-dd HH:mm:ss}" />
+                        <RadzenDataGridColumn TItem="AuditEvent" Property="Event" Title="Event" Width="170px" />
+                        <RadzenDataGridColumn TItem="AuditEvent" Title="Actor">
+                            <Template Context="e">@(e.Actor?.Username ?? "system")</Template>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="AuditEvent" Title="Target">
+                            <Template Context="e">@e.Target?.Username</Template>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="AuditEvent" Title="Change">
+                            <Template Context="e">@Describe(e)</Template>
+                        </RadzenDataGridColumn>
+                    </Columns>
+                </RadzenDataGrid>
+            </RadzenTabsItem>
+        </Tabs>
+    </RadzenTabs>
+</RadzenStack>
+
+@code {
+    private List<UserRecord> _users = new();
+    private List<AuditEvent> _audit = new();
+    private bool _loading = true;
+    private AuditActor? _actor;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _actor = await Admin.GetActorAsync();
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            _users = (await Admin.ListAsync()).ToList();
+            _audit = (await Admin.GetAuditAsync()).ToList();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OnTabChangedAsync(int index)
+    {
+        if (index == 1) _audit = (await Admin.GetAuditAsync()).ToList();
+    }
+
+    private bool CanChange(UserRecord u) =>
+        Admin.CanWrite && !u.IsBootstrap && !(u.TenantId == _actor?.TenantId && u.ObjectId == _actor?.ObjectId && u.ObjectId is not null);
+
+    private async Task AddUsersAsync()
+    {
+        if (await DialogService.OpenAsync<AddUsersDialog>("Add users", options: new DialogOptions { Width = "560px" }) is true)
+        {
+            await LoadAsync();
+        }
+    }
+
+    private async Task ConfirmAsync(string message, Func<Task> action, string success)
+    {
+        if (await DialogService.Confirm(message, "Confirm", new ConfirmOptions { OkButtonText = "Continue", CancelButtonText = "Cancel" }) == true)
+        {
+            await RunAsync(action, success);
+        }
+    }
+
+    private async Task RunAsync(Func<Task> action, string success)
+    {
+        try
+        {
+            await action();
+            Notifications.Notify(NotificationSeverity.Success, success);
+        }
+        catch (Exception ex) when (ex is UserDirectoryException or UnauthorizedAccessException)
+        {
+            Notifications.Notify(NotificationSeverity.Error, "Not changed", ex.Message);
+        }
+        catch (Exception ex) when (ex is IOException or TimeoutException)
+        {
+            Notifications.Notify(NotificationSeverity.Error, "Not changed", "The user list could not be saved. Try again.");
+        }
+        await LoadAsync();
+    }
+
+    private async Task ExportAsync()
+    {
+        using var content = Reports.BuildUsersWorkbook(_users);
+        await Downloads.DownloadAsync($"users-{DateTime.UtcNow:yyyyMMdd-HHmm}.xlsx", ReportExportService.ExcelContentType, content);
+    }
+
+    private static BadgeStyle StatusStyle(UserStatus status) => status switch
+    {
+        UserStatus.Active => BadgeStyle.Success,
+        UserStatus.Disabled => BadgeStyle.Danger,
+        _ => BadgeStyle.Warning
+    };
+
+    private static string Short(string? id) => id is { Length: > 8 } ? id[..8] + "..." : id ?? "-";
+
+    private static string Describe(AuditEvent e)
+    {
+        static string Format(IReadOnlyDictionary<string, string?>? d) => d is null ? "" : string.Join(", ", d.Select(kv => $"{kv.Key}={kv.Value ?? "-"}"));
+        var before = Format(e.Before);
+        var after = Format(e.After);
+        return before.Length > 0 && after.Length > 0 ? $"{before} -> {after}" : before + after;
+    }
+}

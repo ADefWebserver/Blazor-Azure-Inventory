@@ -1,18 +1,30 @@
 using BlazorAzureInventory.Components;
 using BlazorAzureInventory.Models.Options;
+using BlazorAzureInventory.Models.Users;
 using BlazorAzureInventory.Services.AI;
 using BlazorAzureInventory.Services.Analysis;
 using BlazorAzureInventory.Services.Auth;
 using BlazorAzureInventory.Services.Azure;
+using BlazorAzureInventory.Services.Changes;
 using BlazorAzureInventory.Services.Graph;
 using BlazorAzureInventory.Services.Mcp;
+using BlazorAzureInventory.Services.Persistence;
+using BlazorAzureInventory.Services.Quotas;
+using BlazorAzureInventory.Services.Reports;
 using BlazorAzureInventory.Services.Resources;
 using BlazorAzureInventory.Services.Scan;
 using BlazorAzureInventory.Services.Tags;
+using BlazorAzureInventory.Services.Users;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
+using Microsoft.AspNetCore.DataProtection.Repositories;
 using Microsoft.Extensions.Configuration.Json;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Http.Resilience;
+using Microsoft.Extensions.Options;
 using Microsoft.Identity.Web;
 using Microsoft.Identity.Web.UI;
 using Radzen;
@@ -41,21 +53,29 @@ public class Program
             .EnableTokenAcquisitionToCallDownstreamApi(armScopes)
             .AddInMemoryTokenCaches();
         builder.Services.AddTenantGuard();
-        builder.Services.AddUsernameGuard();
         builder.Services.AddTokenCacheSessionGuard(armScopes);
         builder.Services.AddTenantAccess();
-        builder.Services.AddSingleton<SecuritySettingsStore>();
+        builder.Services.AddUserDirectoryAuth();
         builder.Services.AddSingleton<SetupStatusService>();
 
         builder.Services.AddControllersWithViews().AddMicrosoftIdentityUI();
         builder.Services.AddRazorComponents()
             .AddInteractiveServerComponents()
             .AddMicrosoftIdentityConsentHandler();
-        builder.Services.AddAuthorization();
+        var userPolicy = new AuthorizationPolicyBuilder()
+            .RequireAuthenticatedUser()
+            .RequireClaim(AppClaimTypes.Role, AppRoles.User, AppRoles.Admin)
+            .Build();
+        builder.Services.AddAuthorizationBuilder()
+            .AddPolicy(AppPolicies.User, userPolicy)
+            .AddPolicy(AppPolicies.Admin, p => p.RequireAuthenticatedUser().RequireClaim(AppClaimTypes.Role, AppRoles.Admin))
+            .SetDefaultPolicy(userPolicy);
         builder.Services.AddCascadingAuthenticationState();
 
         builder.Services.AddRadzenComponents();
-        builder.Services.AddDataProtection();
+        builder.Services.AddSingleton(TimeProvider.System);
+        AddPersistence(builder.Services);
+        AddHttpRateLimiting(builder.Services, builder.Configuration);
 
         builder.Services.AddOptions<InventoryOptions>().BindConfiguration("Inventory").ValidateDataAnnotations().ValidateOnStart();
         builder.Services.AddOptions<AzureMcpOptions>().BindConfiguration("AzureMcp").ValidateDataAnnotations().ValidateOnStart();
@@ -63,6 +83,10 @@ public class Program
         builder.Services.AddOptions<SecurityOptions>().BindConfiguration("Security");
         builder.Services.AddOptions<AIOptions>().BindConfiguration("AI").ValidateDataAnnotations();
         builder.Services.AddOptions<TaggingOptions>().BindConfiguration("Tagging").ValidateDataAnnotations();
+        builder.Services.AddOptions<PersistenceOptions>().BindConfiguration("Persistence").ValidateDataAnnotations().ValidateOnStart();
+        builder.Services.AddOptions<UserManagementOptions>().BindConfiguration("UserManagement").ValidateDataAnnotations().ValidateOnStart();
+        builder.Services.AddOptions<QuotaOptions>().BindConfiguration("Quotas").ValidateDataAnnotations().ValidateOnStart();
+        builder.Services.AddOptions<ChangeTrackingOptions>().BindConfiguration("ChangeTracking");
 
         // Azure access (scoped == per Blazor circuit == per signed-in user)
         builder.Services.AddScoped<UserContextAccessor>();
@@ -151,6 +175,7 @@ public class Program
 
         app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
         app.UseHttpsRedirection();
+        app.UseRateLimiter();
 
         app.UseAuthentication();
         app.UseAuthorization();
@@ -169,6 +194,73 @@ public class Program
     }
 
     public const string LocalSettingsFile = "appsettings.Local.json";
+
+    private static void AddPersistence(IServiceCollection services)
+    {
+        services.AddSingleton<PersistencePaths>();
+        services.AddSingleton(sp => PersistentVolumeCheck.Evaluate(
+            sp.GetRequiredService<IOptions<PersistenceOptions>>().Value,
+            sp.GetRequiredService<PersistencePaths>(),
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger("BlazorAzureInventory.Persistence")));
+        services.AddSingleton<IUserDataStore>(sp => sp.GetRequiredService<PersistenceStatus>().IsPersistent
+            ? ActivatorUtilities.CreateInstance<FileUserDataStore>(sp)
+            : new NullUserDataStore());
+        services.AddSingleton<IUserDirectoryStore>(sp => sp.GetRequiredService<PersistenceStatus>().IsPersistent
+            ? new FileUserDirectoryStore(sp.GetRequiredService<PersistencePaths>())
+            : new InMemoryUserDirectoryStore(canWrite: false));
+
+        // Without persistent storage the default in-memory key ring is used, as before.
+        services.AddDataProtection().SetApplicationName("BlazorAzureInventory");
+        services.AddOptions<KeyManagementOptions>()
+            .Configure<PersistenceStatus, PersistencePaths, ILoggerFactory>((options, status, paths, loggers) =>
+            {
+                if (status.IsPersistent)
+                    options.XmlRepository = new FileSystemXmlRepository(new DirectoryInfo(paths.DataProtectionDirectory), loggers);
+            });
+
+        services.AddScoped<InventorySessionLoader>();
+        services.AddScoped<UserPreferencesService>();
+        services.AddSingleton<InventoryPersistenceCoordinator>();
+        services.AddHostedService(sp => sp.GetRequiredService<InventoryPersistenceCoordinator>());
+        services.AddHostedService<RetentionCleanupService>();
+        services.AddHealthChecks().AddCheck<PersistenceHealthCheck>("persistence-volume", tags: ["ready"]);
+
+        services.AddSingleton<AuditLog>();
+        services.AddSingleton<UserDirectory>();
+        services.AddScoped<UserAdminService>();
+        services.AddHostedService<DirectoryBootstrapper>();
+
+        services.AddSingleton<UserQuotaService>();
+        services.AddSingleton<SnapshotDiffService>();
+        services.AddScoped<ChangeTrackingService>();
+        services.AddSingleton<ReportExportService>();
+        services.AddScoped<FileDownloadService>();
+    }
+
+    /// <summary>Limits sign-in, sign-out, and tenant-access requests per client IP. Blazor interactions use <see cref="UserQuotaService"/>.</summary>
+    private static void AddHttpRateLimiting(IServiceCollection services, IConfiguration configuration)
+    {
+        var http = configuration.GetSection("Quotas:Http").Get<HttpQuotaOptions>() ?? new HttpQuotaOptions();
+        string[] anonymousPaths = ["/signin-oidc", "/signout-callback-oidc", "/MicrosoftIdentity/Account"];
+        string[] authenticatedPaths = ["/account/logout", TenantAccess.Path];
+        services.AddRateLimiter(options =>
+        {
+            options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+            options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
+            {
+                var path = context.Request.Path;
+                var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+                if (anonymousPaths.Any(p => path.StartsWithSegments(p, StringComparison.OrdinalIgnoreCase)))
+                    return RateLimitPartition.GetFixedWindowLimiter("anon:" + ip, _ => Window(http.AnonymousPerIpPerMinute));
+                if (authenticatedPaths.Any(p => path.StartsWithSegments(p, StringComparison.OrdinalIgnoreCase)))
+                    return RateLimitPartition.GetFixedWindowLimiter("auth:" + ip, _ => Window(http.AuthenticatedPerUserPerMinute));
+                return RateLimitPartition.GetNoLimiter("none");
+            });
+        });
+
+        static FixedWindowRateLimiterOptions Window(int permits) =>
+            new() { PermitLimit = permits, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 };
+    }
 
     // Inserted right after appsettings.{env}.json so user secrets, environment variables, and the command line still win.
     private static void AddLocalSettings(ConfigurationManager configuration, IFileProvider fileProvider)

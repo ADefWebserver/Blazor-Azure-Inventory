@@ -1,0 +1,44 @@
+@using BlazorAzureInventory.Models.Options
+@inject Microsoft.Extensions.Options.IOptions<PersistenceOptions> PersistenceOptions
+@inject TimeProvider Time
+
+@if (Snapshot is not null)
+{
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem" Style="@Style" title="@Snapshot.ScannedUtc.ToString("yyyy-MM-dd HH:mm 'UTC'")">
+        <RadzenBadge BadgeStyle="@(IsStale ? BadgeStyle.Warning : BadgeStyle.Light)" Shade="Shade.Lighter" IsPill="true" Text="@Text" />
+    </RadzenStack>
+}
+else if (ShowNever)
+{
+    <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0" Style="@Style">Last scanned: never</RadzenText>
+}
+
+@code {
+    [Parameter] public InventorySnapshot? Snapshot { get; set; }
+    [Parameter] public SessionDataSource? Source { get; set; }
+    [Parameter] public string? Style { get; set; }
+    [Parameter] public bool ShowNever { get; set; } = true;
+
+    private TimeSpan Age => Time.GetUtcNow() - Snapshot!.ScannedUtc;
+
+    private bool IsStale => Age.TotalHours > PersistenceOptions.Value.StaleAfterHours;
+
+    private string Text
+    {
+        get
+        {
+            var age = FormatAge(Age);
+            return Source == SessionDataSource.Saved
+                ? $"Last scanned {age} - loaded from saved data"
+                : age == "just now" ? "Scanned just now" : $"Last scanned {age}";
+        }
+    }
+
+    public static string FormatAge(TimeSpan age) => age switch
+    {
+        { TotalMinutes: < 1 } => "just now",
+        { TotalMinutes: < 60 } => $"{(int)age.TotalMinutes} min ago",
+        { TotalHours: < 48 } => $"{(int)age.TotalHours} h ago",
+        _ => $"{(int)age.TotalDays} days ago"
+    };
+}

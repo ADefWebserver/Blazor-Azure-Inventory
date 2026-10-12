@@ -1,0 +1,66 @@
+@using BlazorAzureInventory.Services.Users
+@inject UserAdminService Admin
+@inject DialogService DialogService
+
+<RadzenStack Gap="1rem">
+    <RadzenText TextStyle="TextStyle.Body2" class="muted rz-m-0">
+        Enter user principal names or email addresses, separated by commas or new lines (up to 100). Each user gets access the first
+        time they sign in with that username.
+    </RadzenText>
+    <RadzenTextArea @bind-Value="_text" Rows="6" Style="width: 100%;" Placeholder="alice@contoso.com&#10;bob@contoso.com" aria-label="Usernames" />
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+        <RadzenLabel Text="Role" Component="role" />
+        <RadzenDropDown @bind-Value="_role" Data="@Roles" Name="role" Style="width: 160px;" />
+    </RadzenStack>
+    @if (_error is not null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" Shade="Shade.Lighter" AllowClose="false">@_error</RadzenAlert>
+    }
+    @if (_result is not null)
+    {
+        <RadzenAlert AlertStyle="@(_result.Invalid.Count > 0 ? AlertStyle.Warning : AlertStyle.Success)" Shade="Shade.Lighter" AllowClose="false">
+            Added: @_result.Added.Count. Already exists: @_result.Existing.Count. Invalid: @_result.Invalid.Count
+            @if (_result.Invalid.Count > 0)
+            {
+                <div class="mono">@string.Join(", ", _result.Invalid.Take(10))</div>
+            }
+        </RadzenAlert>
+    }
+    <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.5rem">
+        <RadzenButton Text="Close" ButtonStyle="ButtonStyle.Light" Click="@(() => DialogService.Close(_result is { Added.Count: > 0 }))" />
+        <RadzenButton Text="Add" Icon="person_add" ButtonStyle="ButtonStyle.Primary" Click="@AddAsync" IsBusy="@_busy" Disabled="@string.IsNullOrWhiteSpace(_text)" />
+    </RadzenStack>
+</RadzenStack>
+
+@code {
+    private static readonly string[] Roles = [AppRoles.User, AppRoles.Admin];
+    private string _text = "";
+    private string _role = AppRoles.User;
+    private bool _busy;
+    private string? _error;
+    private AddUsersResult? _result;
+
+    private async Task AddAsync()
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            var names = _text.Split([',', ';', '\n', '\r'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+            _result = await Admin.AddAsync(names, _role);
+            if (_result.Invalid.Count == 0) _text = "";
+        }
+        catch (Exception ex) when (ex is UserDirectoryException or UnauthorizedAccessException)
+        {
+            _error = ex.Message;
+        }
+        catch (Exception ex) when (ex is IOException or TimeoutException)
+        {
+            _error = "The user list could not be saved. Try again.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

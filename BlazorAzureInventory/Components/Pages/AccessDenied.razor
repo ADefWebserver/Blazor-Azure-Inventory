@@ -1,5 +1,7 @@
 ﻿@page "/access-denied"
 @layout MainLayout
+@using BlazorAzureInventory.Services.Users
+@inject Microsoft.Extensions.Options.IOptions<BlazorAzureInventory.Models.Options.UserManagementOptions> Options
 
 <PageTitle>Access denied</PageTitle>
 
@@ -7,9 +9,23 @@
     <RadzenStack AlignItems="AlignItems.Center" Gap="1rem">
         <RadzenIcon Icon="block" class="big-icon" IconColor="@Colors.Danger" />
         <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1" class="rz-m-0">Access denied</RadzenText>
-        <RadzenText TextStyle="TextStyle.Body1" class="muted">
-            Your username is not authorized to access this application. Contact an administrator to request access.
-        </RadzenText>
+        <RadzenText TextStyle="TextStyle.Body1" class="muted" Style="text-align: center; max-width: 560px;">@Message</RadzenText>
+        @if (!string.IsNullOrWhiteSpace(Options.Value.SupportContact))
+        {
+            <RadzenText TextStyle="TextStyle.Body2" class="muted">Contact: @Options.Value.SupportContact</RadzenText>
+        }
         <RadzenLink Path="/" Text="Go Home" Icon="home" />
     </RadzenStack>
 </RadzenCard>
+
+@code {
+    [SupplyParameterFromQuery] public string? Reason { get; set; }
+
+    private string Message => Reason switch
+    {
+        DenyReasons.Disabled => "Your account has been disabled for this application. Contact an administrator.",
+        DenyReasons.Mismatch => "Your username is registered to a different account. Ask an administrator to reset your access.",
+        DenyReasons.Unavailable => "Sign-in is temporarily unavailable. Try again later or contact an administrator.",
+        _ => "Your account has not been granted access to this application. Contact an administrator."
+    };
+}

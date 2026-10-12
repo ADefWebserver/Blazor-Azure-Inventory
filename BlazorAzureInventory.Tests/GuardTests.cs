@@ -41,69 +41,40 @@ public class ScmHostValidatorTests
     public void Rejects_http_uris() => Assert.False(_validator.IsAllowed(new Uri("http://shop-web.scm.azurewebsites.net/")));
 }
 
-public class UsernameGuardTests
+public class UserClaimsTests
 {
     [Fact]
-    public void Disabled_allow_list_permits_missing_username()
+    public void Prefers_preferred_username_then_upn()
     {
-        var options = new SecurityOptions { UsernameAllowListEnabled = false };
+        var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.Upn, "upn@contoso.com"), new Claim("preferred_username", " alice@contoso.com ")]));
 
-        Assert.True(UsernameGuard.IsUsernameAllowed(options, null));
-    }
-
-    [Theory]
-    [InlineData("alice@contoso.com", "alice@contoso.com,bob@contoso.com")]
-    [InlineData("ALICE@CONTOSO.COM", " alice@contoso.com , , bob@contoso.com ")]
-    public void Enabled_allow_list_permits_configured_username(string username, string allowedUsernames)
-    {
-        var options = new SecurityOptions { UsernameAllowListEnabled = true, AllowedUsernames = allowedUsernames };
-        var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim("preferred_username", username)]));
-
-        Assert.True(UsernameGuard.IsUsernameAllowed(options, principal));
+        Assert.Equal("alice@contoso.com", UserClaims.GetUsername(principal));
     }
 
     [Fact]
-    public void Enabled_allow_list_rejects_unlisted_username()
+    public void Ignores_unverified_email_claim()
     {
-        var options = new SecurityOptions { UsernameAllowListEnabled = true, AllowedUsernames = "alice@contoso.com" };
-        var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.Upn, "bob@contoso.com")]));
+        var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.Email, "alice@contoso.com"), new Claim("email", "alice@contoso.com")]));
 
-        Assert.False(UsernameGuard.IsUsernameAllowed(options, principal));
-    }
-
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData(" , , ")]
-    public void Enabled_empty_allow_list_rejects_sign_in(string? allowedUsernames)
-    {
-        var options = new SecurityOptions { UsernameAllowListEnabled = true, AllowedUsernames = allowedUsernames ?? string.Empty };
-        var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.Email, "alice@contoso.com")]));
-
-        Assert.False(UsernameGuard.IsUsernameAllowed(options, principal));
+        Assert.Null(UserClaims.GetUsername(principal));
     }
 
     [Fact]
-    public void Enabled_allow_list_rejects_missing_username_claim()
-    {
-        var options = new SecurityOptions { UsernameAllowListEnabled = true, AllowedUsernames = "alice@contoso.com" };
-        var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.Name, "Alice")]));
-
-        Assert.False(UsernameGuard.IsUsernameAllowed(options, principal));
-    }
-
-    [Fact]
-    public async Task Rejected_sign_in_is_handled_with_access_denied_redirect()
+    public async Task Uninvited_sign_in_is_handled_with_access_denied_redirect()
     {
         var services = new ServiceCollection();
         services.AddOptions();
-        services.Configure<SecurityOptions>(options =>
-        {
-            options.UsernameAllowListEnabled = true;
-            options.AllowedUsernames = "alice@contoso.com";
-        });
-        services.AddUsernameGuard();
+        services.AddLogging();
+        services.AddSingleton(TimeProvider.System);
+        services.AddSingleton(new BlazorAzureInventory.Services.Persistence.PersistenceStatus(false, "test"));
+        services.AddSingleton(new BlazorAzureInventory.Services.Persistence.PersistencePaths(Path.GetTempPath()));
+        services.AddSingleton<BlazorAzureInventory.Services.Users.IUserDirectoryStore>(new BlazorAzureInventory.Services.Users.InMemoryUserDirectoryStore(canWrite: true));
+        services.AddSingleton<BlazorAzureInventory.Services.Users.AuditLog>();
+        services.AddSingleton<BlazorAzureInventory.Services.Users.UserDirectory>();
+        services.Configure<UserManagementOptions>(o => o.BootstrapAdmins = "admin@contoso.com");
+        services.AddUserDirectoryAuth();
         await using var provider = services.BuildServiceProvider();
+        await provider.GetRequiredService<BlazorAzureInventory.Services.Users.UserDirectory>().EnsureSeededAsync(CancellationToken.None);
 
         var oidcOptions = provider.GetRequiredService<IOptionsMonitor<OpenIdConnectOptions>>()
             .Get(OpenIdConnectDefaults.AuthenticationScheme);
@@ -112,8 +83,12 @@ public class UsernameGuardTests
             OpenIdConnectDefaults.AuthenticationScheme,
             OpenIdConnectDefaults.AuthenticationScheme,
             typeof(OpenIdConnectHandler));
-        var principal = new ClaimsPrincipal(
-            new ClaimsIdentity([new Claim("preferred_username", "bob@contoso.com")], "test"));
+        var principal = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("preferred_username", "bob@contoso.com"),
+            new Claim("http://schemas.microsoft.com/identity/claims/tenantid", Guid.NewGuid().ToString()),
+            new Claim("http://schemas.microsoft.com/identity/claims/objectidentifier", Guid.NewGuid().ToString())
+        ], "test"));
         var context = new TokenValidatedContext(
             httpContext, scheme, oidcOptions, principal, new AuthenticationProperties());
 
@@ -121,7 +96,7 @@ public class UsernameGuardTests
 
         Assert.True(context.Result?.Handled);
         Assert.Equal(StatusCodes.Status302Found, httpContext.Response.StatusCode);
-        Assert.Equal("/access-denied", httpContext.Response.Headers.Location);
+        Assert.Equal("/access-denied?reason=not-invited", httpContext.Response.Headers.Location);
     }
 }
 

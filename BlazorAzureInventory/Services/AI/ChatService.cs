@@ -9,6 +9,7 @@ using BlazorAzureInventory.Services.AI.TagTools;
 using BlazorAzureInventory.Services.Auth;
 using BlazorAzureInventory.Services.Graph;
 using BlazorAzureInventory.Services.Mcp;
+using BlazorAzureInventory.Services.Persistence;
 using BlazorAzureInventory.Services.Tags;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
@@ -30,7 +31,7 @@ public sealed class ChatService(
     ChatClientFactory clientFactory,
     SessionAISettingsService aiSettings,
     AzureMcpClientFactory mcpFactory,
-    InventorySessionStore store,
+    InventorySessionLoader sessionLoader,
     UserContextAccessor userContext,
     GraphQueryService graphQueries,
     ConnectionTagGenerator tagGenerator,
@@ -38,6 +39,7 @@ public sealed class ChatService(
     TagProposalStore tagProposals,
     IOptions<TaggingOptions> taggingOptions,
     IOptions<AIOptions> aiOptions,
+    Quotas.UserQuotaService quotas,
     ILogger<ChatService> logger)
 {
     private const int MaxHistoryMessages = 20;
@@ -48,7 +50,7 @@ public sealed class ChatService(
     /// <summary>Returns scan and provider context; <see cref="ChatContextInfo.LiveToolsAvailable"/> is null until checked.</summary>
     public async Task<ChatContextInfo> GetContextAsync()
     {
-        var session = store.Get(await userContext.GetUserAsync());
+        var session = await sessionLoader.EnsureLoadedAsync();
         var settings = await aiSettings.GetSettingsAsync();
         var provider = settings.GetOrCreate(settings.ActiveServiceType);
         var configured = provider.IsConfigured && !string.IsNullOrWhiteSpace(provider.AIModel);
@@ -66,7 +68,7 @@ public sealed class ChatService(
 
     public async Task SendAsync(IReadOnlyList<ChatMessageItem> history, Func<ChatStreamEvent, Task> onEvent, CancellationToken ct)
     {
-        var session = store.Get(await userContext.GetUserAsync());
+        var session = await sessionLoader.EnsureLoadedAsync(ct);
         if (session?.Snapshot is null || session.Index is null)
         {
             await onEvent(new ChatErrorEvent("No scan is available. Run a scan on the Inventory page first."));
@@ -88,6 +90,14 @@ public sealed class ChatService(
             await onEvent(new ChatErrorEvent("No AI provider is configured for this session. Open Settings to add one."));
             return;
         }
+
+        var user = await userContext.GetUserAsync();
+        if (quotas.TryChatTurn(user, info.UsesDefaultKey) is { Allowed: false, Message: var quotaMessage })
+        {
+            await onEvent(new ChatErrorEvent(quotaMessage!));
+            return;
+        }
+        Action<long> onUsage = info.UsesDefaultKey ? tokens => quotas.RecordDefaultProviderTokens(user, tokens) : _ => { };
 
         var opts = aiOptions.Value;
         var tagging = taggingOptions.Value;
@@ -124,7 +134,7 @@ public sealed class ChatService(
 
                 var messages = new List<ChatMessage> { new(ChatRole.System, systemPrompt) };
                 messages.AddRange(conversation);
-                await StreamAsync(info.Client, messages, CreateOptions(tools), Emit, ct);
+                await StreamAsync(info.Client, messages, CreateOptions(tools), Emit, onUsage, ct);
                 return;
             }
             catch (Exception ex) when (!ct.IsCancellationRequested && !emittedText)
@@ -142,7 +152,7 @@ public sealed class ChatService(
                 : "";
             var messages = new List<ChatMessage> { new(ChatRole.System, systemPrompt + fallbackNote + "\n\nGROUNDING DATA\n" + grounding) };
             messages.AddRange(conversation);
-            await StreamAsync(info.Client, messages, CreateOptions(null), Emit, ct);
+            await StreamAsync(info.Client, messages, CreateOptions(null), Emit, onUsage, ct);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
@@ -159,11 +169,15 @@ public sealed class ChatService(
     };
 
     private static async Task StreamAsync(IChatClient client, List<ChatMessage> messages, ChatOptions options,
-        Func<ChatStreamEvent, Task> emit, CancellationToken ct)
+        Func<ChatStreamEvent, Task> emit, Action<long> onUsage, CancellationToken ct)
     {
         await foreach (var update in client.GetStreamingResponseAsync(messages, options, ct))
         {
             if (!string.IsNullOrEmpty(update.Text)) await emit(new TextDeltaEvent(update.Text));
+            foreach (var usage in update.Contents.OfType<UsageContent>())
+            {
+                onUsage(usage.Details.TotalTokenCount ?? (usage.Details.InputTokenCount ?? 0) + (usage.Details.OutputTokenCount ?? 0));
+            }
         }
     }
 

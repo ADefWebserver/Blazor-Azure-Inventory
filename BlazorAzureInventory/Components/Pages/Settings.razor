@@ -1,16 +1,18 @@
 @page "/settings"
 @attribute [Authorize]
 @using BlazorAzureInventory.Models.Options
+@using BlazorAzureInventory.Models.Users
 @using BlazorAzureInventory.Services.AI
 @using BlazorAzureInventory.Services.Auth
+@using BlazorAzureInventory.Services.Persistence
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.Extensions.Options
-@using System.Text.Json
 @inject AuthenticationStateProvider AuthenticationStateProvider
 @inject SessionAISettingsService SettingsService
-@inject SecuritySettingsStore SecuritySettingsStore
-@inject IOptionsMonitor<SecurityOptions> SecurityOptions
+@inject IUserDataStore DataStore
+@inject IOptions<PersistenceOptions> PersistenceOptions
 @inject NotificationService NotificationService
+@inject DialogService DialogService
 
 <PageTitle>Settings - Azure Inventory</PageTitle>
 
@@ -18,25 +20,56 @@
     <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1" class="page-title">Settings</RadzenText>
 
     <RadzenCard class="rz-p-6">
-        <RadzenStack Gap="1rem">
-            <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">Authentication access</RadzenText>
-            <RadzenAlert AlertStyle="AlertStyle.Warning" Shade="Shade.Lighter" AllowClose="false" Icon="warning">
-                When enabled, only users whose sign-in username exactly matches an entry below can authenticate.
-                Matching is case-insensitive and spaces around entries are ignored. When the restriction is enabled, your current
-                sign-in username is automatically added to the list. Changes apply to future sign-ins; existing sessions are not signed out.
-            </RadzenAlert>
-            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
-                <RadzenSwitch Value="_usernameAllowListEnabled" ValueChanged="OnUsernameAllowListEnabledChangedAsync" Name="usernameAllowListEnabled" />
-                <RadzenLabel Text="Restrict authentication by username" Component="usernameAllowListEnabled" />
+        <RadzenStack Gap="0.75rem">
+            <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">Your access</RadzenText>
+            <RadzenStack Orientation="Orientation.Horizontal" Gap="2rem" Wrap="FlexWrap.Wrap">
+                <RadzenStack Gap="0">
+                    <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">Username</RadzenText>
+                    <RadzenText TextStyle="TextStyle.Body1" class="mono rz-m-0">@(_username ?? "-")</RadzenText>
+                </RadzenStack>
+                <RadzenStack Gap="0">
+                    <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">App role</RadzenText>
+                    <RadzenBadge BadgeStyle="@(_role == AppRoles.Admin ? BadgeStyle.Primary : BadgeStyle.Light)" Text="@(_role ?? "None")" />
+                </RadzenStack>
             </RadzenStack>
-            <RadzenLabel Text="Allowed usernames (comma-separated)" Component="allowedUsernames" />
-            <RadzenTextArea @bind-Value="_allowedUsernames" Name="allowedUsernames" Rows="3"
-                            Placeholder="alice@contoso.com, bob@contoso.com" Style="width: 100%; resize: vertical;" />
-            <RadzenText TextStyle="TextStyle.Caption">
-                Values are saved to the Security section of appsettings.json. Deployment or environment-variable overrides may take precedence,
-                and the host must permit writing to that file.
+            <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">
+                The app role controls who can use and manage this app only. Your Azure permissions are unchanged.
             </RadzenText>
-            <RadzenButton Text="Save authentication access" Icon="save" Click="@SaveSecurityAsync" Disabled="@_savingSecurity" Style="align-self: flex-start;" />
+            <AuthorizeView Policy="@AppPolicies.Admin">
+                <RadzenLink Path="admin/users" Text="Manage users" Icon="manage_accounts" />
+            </AuthorizeView>
+        </RadzenStack>
+    </RadzenCard>
+
+    <RadzenCard class="rz-p-6">
+        <RadzenStack Gap="0.75rem">
+            <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">Saved data</RadzenText>
+            @if (!DataStore.IsPersistent)
+            {
+                <RadzenAlert AlertStyle="AlertStyle.Warning" Shade="Shade.Lighter" AllowClose="false">
+                    Persistent storage is not available. Scans are kept for this session only.
+                </RadzenAlert>
+            }
+            else if (_info?.Summary is { } summary)
+            {
+                <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">
+                    Last saved scan: @summary.ScannedUtc.ToString("yyyy-MM-dd HH:mm 'UTC'") &nbsp;•&nbsp; @summary.ResourceCount resources
+                    in @summary.SubscriptionCount subscription@(summary.SubscriptionCount == 1 ? "" : "s") &nbsp;•&nbsp; @FormatSize(_info.SnapshotBytes)
+                </RadzenText>
+            }
+            else
+            {
+                <RadzenText TextStyle="TextStyle.Body2" class="muted rz-m-0">No saved scan yet. Your next scan is saved automatically.</RadzenText>
+            }
+            @if (DataStore.IsPersistent)
+            {
+                <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">
+                    Your last scan and preferences are saved so pages open without rescanning Azure. They are visible only to you and
+                    are deleted after @PersistenceOptions.Value.RetentionDays days without use. Secret values are never saved.
+                </RadzenText>
+                <RadzenButton Text="Delete my saved data" Icon="delete" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Outlined"
+                              Click="@DeleteSavedDataAsync" Disabled="@_deleting" Style="align-self: flex-start;" />
+            }
         </RadzenStack>
     </RadzenCard>
 
@@ -63,55 +96,49 @@
 
 @code {
     private AIServiceSettingsEditor? _editor;
-    private bool _usernameAllowListEnabled;
-    private string _allowedUsernames = string.Empty;
-    private bool _savingSecurity;
+    private string? _username;
+    private string? _role;
+    private SavedDataInfo? _info;
+    private bool _deleting;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
-        var security = SecurityOptions.CurrentValue;
-        _usernameAllowListEnabled = security.UsernameAllowListEnabled;
-        _allowedUsernames = security.AllowedUsernames;
+        var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+        _username = UserClaims.GetUsername(user);
+        _role = UserClaims.GetAppRole(user);
+        if (UserKey.FromPrincipal(user) is { } key) _info = await DataStore.GetInfoAsync(key, CancellationToken.None);
     }
 
-    private async Task OnUsernameAllowListEnabledChangedAsync(bool enabled)
+    private async Task DeleteSavedDataAsync()
     {
-        _usernameAllowListEnabled = enabled;
-        if (!enabled)
-        {
-            return;
-        }
+        var confirmed = await DialogService.Confirm(
+            "Delete your saved scan and preferences? The current session keeps working until you sign out.",
+            "Delete saved data", new ConfirmOptions { OkButtonText = "Delete", CancelButtonText = "Cancel" });
+        if (confirmed != true) return;
 
-        var authenticationState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
-        var username = UsernameGuard.GetUsername(authenticationState.User);
-        if (string.IsNullOrWhiteSpace(username))
-        {
-            return;
-        }
-
-        var allowedUsernames = UsernameGuard.ParseAllowedUsernames(_allowedUsernames);
-        allowedUsernames.Add(username);
-        _allowedUsernames = string.Join(", ", allowedUsernames);
-    }
-
-    private async Task SaveSecurityAsync()
-    {
-        _savingSecurity = true;
+        _deleting = true;
         try
         {
-            await SecuritySettingsStore.SaveUsernameAllowListAsync(_usernameAllowListEnabled, _allowedUsernames);
-            _allowedUsernames = string.Join(", ", UsernameGuard.ParseAllowedUsernames(_allowedUsernames));
-            NotificationService.Notify(NotificationSeverity.Success, "Saved", "Authentication access settings were saved.");
+            var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+            if (UserKey.FromPrincipal(user) is { } key)
+            {
+                await DataStore.DeleteAllAsync(key, CancellationToken.None);
+                _info = await DataStore.GetInfoAsync(key, CancellationToken.None);
+            }
+            NotificationService.Notify(NotificationSeverity.Success, "Deleted", "Your saved data was deleted.");
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            NotificationService.Notify(NotificationSeverity.Error, "Could not save", ex.Message);
+            NotificationService.Notify(NotificationSeverity.Error, "Not deleted", "Your saved data could not be deleted. Try again later.");
         }
         finally
         {
-            _savingSecurity = false;
+            _deleting = false;
         }
     }
+
+    private static string FormatSize(long bytes) =>
+        bytes >= 1024 * 1024 ? $"{bytes / 1024.0 / 1024.0:0.0} MB" : $"{Math.Max(1, bytes / 1024)} KB";
 
     private async Task ClearAsync()
     {

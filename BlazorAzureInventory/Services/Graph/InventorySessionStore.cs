@@ -10,12 +10,23 @@ using Microsoft.Identity.Web;
 
 namespace BlazorAzureInventory.Services.Graph;
 
+public enum SessionDataSource { Scan, Saved }
+
 public sealed class InventorySession
 {
     public InventorySnapshot? Snapshot { get; set; }
     public GraphDocument? Graph { get; set; }
     public GraphIndex? Index { get; set; }
     public ProtectedAISettings? AISettings { get; set; }
+
+    /// <summary>Whether <see cref="Snapshot"/> came from a scan in this session or was loaded from saved data.</summary>
+    public SessionDataSource Source { get; set; }
+
+    /// <summary>Subscriptions in the saved scan that the user can no longer access, and that were hidden on load.</summary>
+    public int HiddenSubscriptions { get; set; }
+
+    /// <summary>Cached comparison with the previous saved scan, valid while its CurrentScannedUtc matches <see cref="Snapshot"/>.</summary>
+    public SnapshotDiff? Changes { get; set; }
 
     /// <summary>Guards tag mutations; one session can be shared by several circuits (browser tabs) of the same user.</summary>
     public object SyncRoot { get; } = new();
@@ -59,6 +70,9 @@ public sealed class InventorySessionStore : IDisposable
 
     public InventorySession? Get(ClaimsPrincipal user) =>
         KeyFor(user) is { } key && _cache.TryGetValue(key, out InventorySession? session) ? session : null;
+
+    /// <summary>Looks up a session by its <c>inv:{tid}:{oid}</c> key, for background work that has no principal.</summary>
+    public InventorySession? GetByKey(string key) => _cache.TryGetValue(key, out InventorySession? session) ? session : null;
 
     public InventorySession GetOrCreate(ClaimsPrincipal user)
     {

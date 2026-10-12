@@ -1,6 +1,8 @@
 @page "/"
 @inject NavigationManager Nav
 @inject InventorySessionStore Store
+@inject BlazorAzureInventory.Services.Persistence.InventorySessionLoader Loader
+@inject AuthenticationStateProvider AuthState
 @inject SetupStatusService Setup
 
 <PageTitle>Azure Inventory</PageTitle>
@@ -110,7 +112,14 @@
 @code {
     private IReadOnlyList<SetupRequirement> missing = [];
 
-    protected override void OnInitialized() => missing = Setup.GetMissing();
+    protected override async Task OnInitializedAsync()
+    {
+        missing = Setup.GetMissing();
+        if ((await AuthState.GetAuthenticationStateAsync()).User.Identity?.IsAuthenticated == true)
+        {
+            await Loader.EnsureLoadedAsync();
+        }
+    }
 
     private void SignIn() => Nav.NavigateTo("MicrosoftIdentity/Account/SignIn?redirectUri=%2Finventory", forceLoad: true);
 

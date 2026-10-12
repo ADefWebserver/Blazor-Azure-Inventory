@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using BlazorAzureInventory.Models.Configuration;
 
 namespace BlazorAzureInventory.Models.Inventory;
@@ -39,6 +40,7 @@ public enum ScanIssueKind { AccessDenied, NotFound, Throttled, Timeout, ConsentR
 
 public sealed record ScanIssue(string? ResourceId, string Stage, ScanIssueKind Kind, string Message)
 {
+    [JsonIgnore]
     public string ResourceName => ResourceId is null ? "-" : ResourceId.TrimEnd('/').Split('/')[^1];
 }
 
@@ -63,6 +65,7 @@ public sealed record InventorySnapshot(
     IReadOnlyList<AppConfigAnalysis> AppConfigs,
     IReadOnlyList<ScanIssue> Issues)
 {
+    [JsonIgnore]
     public string ScopeDescription =>
         $"{Tenants.Count} tenant{(Tenants.Count == 1 ? "" : "s")}, {Subscriptions.Count} subscription{(Subscriptions.Count == 1 ? "" : "s")}";
 }

@@ -3,11 +3,18 @@
 @implements IDisposable
 @using BlazorAzureInventory.Components.Inventory
 @using BlazorAzureInventory.Services.Azure
+@using BlazorAzureInventory.Services.Persistence
 @using BlazorAzureInventory.Services.Scan
 @using Microsoft.Identity.Web
 @inject AzureContextService AzureContextService
 @inject InventoryScanOrchestrator Orchestrator
 @inject InventorySessionStore Store
+@inject InventorySessionLoader Loader
+@inject UserPreferencesService Preferences
+@inject BlazorAzureInventory.Services.Changes.ChangeTrackingService ChangeTracking
+@inject BlazorAzureInventory.Services.Reports.ReportExportService Reports
+@inject BlazorAzureInventory.Services.Reports.FileDownloadService Downloads
+@inject BlazorAzureInventory.Services.Quotas.UserQuotaService Quotas
 @inject UserContextAccessor UserContext
 @inject DialogService DialogService
 @inject NotificationService Notifications
@@ -30,9 +37,9 @@
             }
             else
             {
-                <SubscriptionPicker Context="@_context" @bind-SelectedIds="_selected" OnGrantAccess="@GrantAccess" Disabled="@_scanning" />
+                <SubscriptionPicker Context="@_context" @bind-SelectedIds="_selected" @bind-SelectedIds:after="SaveSelectionAsync" OnGrantAccess="@GrantAccess" Disabled="@_scanning" />
             }
-            <RadzenButton Text="Scan" Icon="play_arrow" ButtonStyle="ButtonStyle.Primary" Click="@ScanAsync"
+            <RadzenButton Text="@(_snapshot is null ? "Scan" : "Refresh from Azure")" Icon="@(_snapshot is null ? "play_arrow" : "refresh")" ButtonStyle="ButtonStyle.Primary" Click="@ScanAsync"
                           Disabled="@(_scanning || !_selected.Any())" IsBusy="@_scanning" BusyText="Scanning..." />
             @if (_scanning)
             {
@@ -43,12 +50,30 @@
                 <RadzenButton Text="Tag connections..." Icon="sell" ButtonStyle="ButtonStyle.Light" Click="@OpenBulkTaggingAsync"
                               Disabled="@(_snapshot is null)" title="Write conn-out-* and conn-in-* tags that list what each resource connects to" />
             }
+            @if (!_scanning && _snapshot is not null)
+            {
+                <RadzenButton Text="Excel report" Icon="table_view" ButtonStyle="ButtonStyle.Light" Click="@ExportExcelAsync" IsBusy="@_exporting"
+                              title="Download every inventory table, connections, tags, scan issues, and changes as one workbook" />
+                <RadzenButton Text="CSV" Icon="download" ButtonStyle="ButtonStyle.Light" Click="@ExportCsvAsync" Disabled="@_exporting"
+                              title="Download the current tab as CSV" />
+            }
         </RadzenStack>
     </RadzenStack>
 
-    <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0" Style="text-align: right;">
-        Last scanned: @(_snapshot?.ScannedUtc.ToString("yyyy-MM-dd HH:mm 'UTC'") ?? "never")
-    </RadzenText>
+    <ScanAgeBadge Snapshot="@_snapshot" Source="@_source" Style="align-self: flex-end;" />
+
+    @if (_hiddenSubscriptions > 0)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Info" Shade="Shade.Lighter" AllowClose="true">
+            @_hiddenSubscriptions subscription@(_hiddenSubscriptions == 1 ? " from your saved scan is" : "s from your saved scan are") no longer accessible and @(_hiddenSubscriptions == 1 ? "was" : "were") hidden. Refresh to update.
+        </RadzenAlert>
+    }
+    @if (Loader.LastOutcome == SessionLoadOutcome.AccessCheckFailed)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Warning" Shade="Shade.Lighter" AllowClose="true">
+            Your saved scan was not shown because your current Azure access could not be confirmed. Grant access or refresh from Azure.
+        </RadzenAlert>
+    }
 
     @if (_scanning)
     {
@@ -92,7 +117,7 @@
         }
     </RadzenStack>
 
-    <RadzenTabs RenderMode="TabRenderMode.Client">
+    <RadzenTabs RenderMode="TabRenderMode.Client" SelectedIndex="@_tabIndex" Change="@OnTabChangedAsync">
         <Tabs>
             <RadzenTabsItem Text="Web & Function Apps" Icon="language">
                 <WebAppsGrid Data="@(_view?.Apps ?? [])" IsLoading="@_scanning" OnViewConfiguration="@ViewConfiguration" />
@@ -112,6 +137,9 @@
             <RadzenTabsItem Text="Other" Icon="category">
                 <OtherResourcesGrid Data="@(_view?.Other ?? [])" IsLoading="@_scanning" />
             </RadzenTabsItem>
+            <RadzenTabsItem Text="@(_changes is { TotalCount: > 0 } ? $"Changes ({_changes.TotalCount})" : "Changes")" Icon="difference">
+                <ChangesPanel Changes="@_changes" />
+            </RadzenTabsItem>
         </Tabs>
     </RadzenTabs>
 </RadzenStack>
@@ -127,23 +155,41 @@
     private CancellationTokenSource? _cts;
     private DateTime _lastProgressRender;
     private string? _sessionKey;
+    private SessionDataSource? _source;
+    private int _hiddenSubscriptions;
+    private int _tabIndex;
+    private SnapshotDiff? _changes;
+    private bool _exporting;
+
+    private static readonly string[] TabTitles = ["Web & Function Apps", "SQL", "Storage", "Container Apps", "Registries", "Other", "Changes"];
 
     protected override async Task OnInitializedAsync()
     {
         var user = await UserContext.GetUserAsync();
         _sessionKey = InventorySessionStore.KeyFor(user);
         Store.TagsChanged += OnTagsChanged;
-        if (Store.Get(user) is { Snapshot: { } snapshot } session)
+        var prefs = await Preferences.GetAsync();
+        _tabIndex = Math.Max(0, Array.IndexOf(TabTitles, prefs.InventoryTab));
+        if (await Loader.EnsureLoadedAsync() is { Snapshot: { } snapshot } session)
         {
             _snapshot = snapshot;
             _view = InventoryView.Build(snapshot, session.Index);
             _selected = snapshot.Subscriptions.Select(s => s.SubscriptionId).ToList();
+            _source = session.Source;
+            _hiddenSubscriptions = session.HiddenSubscriptions;
+            _changes = await ChangeTracking.GetChangesAsync();
         }
 
         try
         {
             _context = await AzureContextService.GetContextAsync();
-            if (_snapshot is null)
+            if (prefs.SelectedSubscriptionIds.Count > 0)
+            {
+                var saved = prefs.SelectedSubscriptionIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var restored = _context.Subscriptions.Where(s => saved.Contains(s.SubscriptionId)).Select(s => s.SubscriptionId).ToList();
+                if (restored.Count > 0) _selected = restored;
+            }
+            else if (_snapshot is null)
             {
                 _selected = _context.Subscriptions.Where(s => s.State == "Enabled").Select(s => s.SubscriptionId).ToList();
             }
@@ -156,6 +202,58 @@
         {
             _loadingContext = false;
         }
+    }
+
+    private Task SaveSelectionAsync() =>
+        Preferences.UpdateAsync(p => p.SelectedSubscriptionIds = _selected.ToList());
+
+    private async Task ExportExcelAsync()
+    {
+        if (_snapshot is not { } snapshot || !await CheckReportQuotaAsync()) return;
+        _exporting = true;
+        try
+        {
+            var user = await UserContext.GetUserAsync();
+            var index = Store.Get(user)?.Index;
+            var generatedBy = UserClaims.GetUsername(user) ?? "unknown";
+            using var content = await Task.Run(() => Reports.BuildInventoryWorkbook(snapshot, index, _changes, generatedBy));
+            await Downloads.DownloadAsync($"inventory-report-{DateTime.UtcNow:yyyyMMdd-HHmm}.xlsx",
+                BlazorAzureInventory.Services.Reports.ReportExportService.ExcelContentType, content);
+        }
+        finally
+        {
+            _exporting = false;
+        }
+    }
+
+    private async Task ExportCsvAsync()
+    {
+        if (_snapshot is not { } snapshot || !await CheckReportQuotaAsync()) return;
+        var index = Store.Get(await UserContext.GetUserAsync())?.Index;
+        var name = TabTitles.ElementAtOrDefault(_tabIndex) ?? TabTitles[0];
+        var table = Reports.BuildTables(snapshot, index, _changes).FirstOrDefault(t => t.Name == name);
+        if (table is null)
+        {
+            Notifications.Notify(NotificationSeverity.Info, "Nothing to export", "This tab has no data to export.");
+            return;
+        }
+        using var content = Reports.BuildCsv(table);
+        var slug = new string(name.ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray()).Trim('-');
+        await Downloads.DownloadAsync($"inventory-{slug}-{DateTime.UtcNow:yyyyMMdd-HHmm}.csv",
+            BlazorAzureInventory.Services.Reports.ReportExportService.CsvContentType, content);
+    }
+
+    private async Task<bool> CheckReportQuotaAsync()
+    {
+        var result = Quotas.TryReport(await UserContext.GetUserAsync());
+        if (!result.Allowed) Notifications.Notify(NotificationSeverity.Warning, "Download not started", result.Message ?? "");
+        return result.Allowed;
+    }
+
+    private Task OnTabChangedAsync(int index)
+    {
+        _tabIndex = index;
+        return Preferences.UpdateAsync(p => p.InventoryTab = TabTitles.ElementAtOrDefault(index));
     }
 
     private async Task ScanAsync()
@@ -175,12 +273,23 @@
             _snapshot = await Task.Run(() => Orchestrator.ScanAsync(request, new Progress(this), _cts.Token));
             var session = Store.Get(await UserContext.GetUserAsync());
             _view = InventoryView.Build(_snapshot, session?.Index);
+            _source = SessionDataSource.Scan;
+            _hiddenSubscriptions = 0;
+            _changes = await ChangeTracking.GetChangesAsync();
             Notifications.Notify(NotificationSeverity.Success, "Scan complete",
                 $"{_snapshot.Resources.Count} resources in {_snapshot.ScopeDescription}.");
+            if (Orchestrator.LastSaveError is { } saveError)
+            {
+                Notifications.Notify(NotificationSeverity.Warning, "Not saved", saveError);
+            }
         }
         catch (OperationCanceledException)
         {
             Notifications.Notify(NotificationSeverity.Info, "Scan cancelled", "Partial results were discarded.");
+        }
+        catch (BlazorAzureInventory.Services.Quotas.QuotaExceededException ex)
+        {
+            Notifications.Notify(NotificationSeverity.Warning, "Scan not started", ex.Message);
         }
         catch (Exception ex)
         {
