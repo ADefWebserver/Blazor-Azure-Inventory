@@ -1,9 +1,11 @@
+using BlazorAzureInventory.Services.Users;
+
 namespace BlazorAzureInventory.Services.Auth;
 
-public enum SetupRequirement { ClientId, ClientCredential, McpScope }
+public enum SetupRequirement { ClientId, ClientCredential, McpScope, BootstrapAdmins }
 
 /// <summary>Detects required configuration values that are missing or still hold "&lt;...&gt;" placeholders.</summary>
-public sealed class SetupStatusService(IConfiguration configuration)
+public sealed class SetupStatusService(IConfiguration configuration, UserDirectory directory)
 {
     public string? WebClientId =>
         Guid.TryParse(configuration["AzureAd:ClientId"], out var id) ? id.ToString() : null;
@@ -21,6 +23,9 @@ public sealed class SetupStatusService(IConfiguration configuration)
             var scopes = configuration.GetSection("AzureMcp:Scopes").GetChildren().Select(s => s.Value).ToList();
             if (scopes.Count == 0 || !scopes.All(IsSet)) missing.Add(SetupRequirement.McpScope);
         }
+
+        // Without a readable users.json only bootstrap admins can sign in.
+        if (!directory.IsAvailable && directory.BootstrapAdmins.Count == 0) missing.Add(SetupRequirement.BootstrapAdmins);
 
         return missing;
     }

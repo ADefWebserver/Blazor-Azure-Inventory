@@ -140,6 +140,37 @@
             </section>
         }
 
+        @if (Missing.Contains(SetupRequirement.BootstrapAdmins))
+        {
+            <section>
+                <RadzenText TextStyle="TextStyle.H6" TagName="TagName.H3">Initial administrators (<code>UserManagement:BootstrapAdmins</code>)</RadzenText>
+                <RadzenText TextStyle="TextStyle.Body2">
+                    No user list exists yet and no initial administrators are configured, so every sign-in is denied.
+                    Initial administrators can always sign in as Admin and can then add other users on the Users page.
+                    Use full sign-in names (UPNs), separated by commas.
+                </RadzenText>
+                <ol class="setup-steps">
+                    @if (Env.IsDevelopment())
+                    {
+                        <li>
+                            When running through the Aspire AppHost, add this to <code>BlazorAzureInventorySolution.AppHost/appsettings.Local.json</code>
+                            (merge it with the existing content). The AppHost passes the value to the web app, overriding the web app's own settings:
+                            <pre class="setup-command"><code>@BootstrapAdminsTemplate</code></pre>
+                        </li>
+                        <li>When running the web project without Aspire, add the same <code>UserManagement</code> section to <code>BlazorAzureInventory/@Program.LocalSettingsFile</code> instead.</li>
+                        <li>Restart the whole AppHost, not only the web resource. The AppHost reads this value only when it starts.</li>
+                    }
+                    else
+                    {
+                        <li>
+                            Add the app setting:
+                            <pre class="setup-command"><code>UserManagement__BootstrapAdmins = &lt;admin1@contoso.com, admin2@contoso.com&gt;</code></pre>
+                        </li>
+                    }
+                </ol>
+            </section>
+        }
+
         @if (Missing.Contains(SetupRequirement.McpScope))
         {
             <section>
@@ -154,17 +185,28 @@
                     <li>Open <strong>API permissions</strong> &gt; <strong>+ Add a permission</strong> &gt; <strong>Azure Service Management</strong> &gt; <strong>Delegated permissions</strong> &gt; <code>user_impersonation</code> &gt; <strong>Add permissions</strong>.</li>
                     <li>In the <code>azinventory-web</code> registration open <strong>API permissions</strong> &gt; <strong>+ Add a permission</strong> &gt; <strong>APIs my organization uses</strong> &gt; <code>azinventory-mcp</code> &gt; <strong>Delegated permissions</strong> &gt; <code>Mcp.Tools.Read</code> &gt; <strong>Add permissions</strong>.</li>
                     <li>
+                        In <strong>API permissions</strong> of both <code>azinventory-web</code> and <code>azinventory-mcp</code>, select
+                        <strong>Grant admin consent for &lt;tenant&gt;</strong> and confirm (requires an administrator who can grant tenant-wide consent).
+                        Without it the MCP token request fails with <code>AADSTS65001</code> and AI Chat runs without Azure MCP tools.
+                    </li>
+                    <li>
                         Save the scope (only the client ID inside the URI changes):
                         @Settings(("AzureMcp:Scopes:0", "<azinventory-mcp-client-id>", "<MCP client ID>"))
                     </li>
                     @if (Env.IsDevelopment())
                     {
                         <li>
+                            In the <code>azinventory-mcp</code> registration open <strong>Certificates &amp; secrets</strong> &gt; <strong>Client secrets</strong> &gt;
+                            <strong>+ New client secret</strong>, select <strong>Add</strong>, and copy the <strong>Value</strong>. The local MCP container uses it for On-Behalf-Of calls to Azure.
+                        </li>
+                        <li>
                             Set the AppHost parameters for the MCP container in <code>BlazorAzureInventorySolution.AppHost/appsettings.Local.json</code>
-                            (create it with this content if it does not exist), replacing both placeholders:
+                            (create it with this content if it does not exist), replacing all three placeholders:
                             <pre class="setup-command"><code>@AppHostSettingsTemplate</code></pre>
-                            <code>&lt;azinventory-mcp-tenant-id&gt;</code> is the <strong>Directory (tenant) ID</strong> and
-                            <code>&lt;azinventory-mcp-client-id&gt;</code> is the <strong>MCP client ID</strong>.
+                            <code>&lt;azinventory-mcp-tenant-id&gt;</code> is the <strong>Directory (tenant) ID</strong>,
+                            <code>&lt;azinventory-mcp-client-id&gt;</code> is the <strong>MCP client ID</strong>, and
+                            <code>&lt;azinventory-mcp-client-secret&gt;</code> is the secret <strong>Value</strong>.
+                            Until the secret is set, the <code>azure-mcp</code> resource waits for input and never starts.
                         </li>
                     }
                 </ol>
@@ -219,7 +261,16 @@
         {
           "Parameters": {
             "mcpTenantId": "<azinventory-mcp-tenant-id>",
-            "mcpClientId": "<azinventory-mcp-client-id>"
+            "mcpClientId": "<azinventory-mcp-client-id>",
+            "mcpClientSecret": "<azinventory-mcp-client-secret>"
+          }
+        }
+        """;
+
+    private const string BootstrapAdminsTemplate = """
+        {
+          "UserManagement": {
+            "BootstrapAdmins": "admin1@contoso.com, admin2@contoso.com"
           }
         }
         """;

@@ -66,6 +66,8 @@ public sealed class ChatService(
 
     public async Task<bool> IsLiveToolsAvailableAsync(CancellationToken ct) => (await mcpFactory.GetToolsAsync(ct)).Count > 0;
 
+    public string? LiveToolsUnavailableReason => mcpFactory.UnavailableReason;
+
     public async Task SendAsync(IReadOnlyList<ChatMessageItem> history, Func<ChatStreamEvent, Task> onEvent, CancellationToken ct)
     {
         var session = await sessionLoader.EnsureLoadedAsync(ct);

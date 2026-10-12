@@ -60,13 +60,21 @@ public sealed class AzureMcpClientFactory(
     private IReadOnlyList<AITool>? _tools;
     private bool _unavailable;
 
+    /// <summary>Why live Azure tools are unavailable and what to do about it; null while they work or before the first check.</summary>
+    public string? UnavailableReason { get; private set; }
+
     public bool IsEnabled =>
         options.Value.Enabled && !string.IsNullOrWhiteSpace(options.Value.Endpoint) && options.Value.Scopes.Length > 0;
 
     /// <summary>Returns the allowlisted tools, or an empty list when the server is disabled or unreachable.</summary>
     public async Task<IReadOnlyList<AITool>> GetToolsAsync(CancellationToken ct)
     {
-        if (!IsEnabled || _unavailable) return [];
+        if (!IsEnabled)
+        {
+            UnavailableReason = DescribeDisabled(options.Value);
+            return [];
+        }
+        if (_unavailable) return [];
         if (_tools is not null) return _tools;
 
         await _gate.WaitAsync(ct);
@@ -103,12 +111,20 @@ public sealed class AzureMcpClientFactory(
             _client = await McpClient.CreateAsync(transport, clientOptions, loggerFactory, timeout.Token);
             var all = await _client.ListToolsAsync(cancellationToken: timeout.Token);
             _tools = McpToolFilter.Filter(all, opts.AllowedTools, _logger);
+            if (_tools.Count == 0)
+            {
+                UnavailableReason = "The Azure MCP Server is running but exposes none of the tools listed in AzureMcp:AllowedTools. " +
+                                    "Update AzureMcp:AllowedTools to match the tool names of the pinned server image.";
+                _logger.LogWarning("Azure MCP server unavailable: {Reason}", UnavailableReason);
+            }
             return _tools;
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             _unavailable = true;
-            _logger.LogWarning("Azure MCP server unavailable ({ExceptionType}); chat continues with graph tools only", ex.GetType().Name);
+            UnavailableReason = DescribeFailure(ex, options.Value);
+            _logger.LogWarning("Azure MCP server unavailable ({ExceptionType}): {Reason} Chat continues with graph tools only.",
+                ex.GetType().Name, UnavailableReason);
             return [];
         }
         finally
@@ -116,6 +132,52 @@ public sealed class AzureMcpClientFactory(
             _gate.Release();
         }
     }
+
+    public static string DescribeDisabled(AzureMcpOptions opts) =>
+        !opts.Enabled ? "The Azure MCP Server is turned off. Set AzureMcp:Enabled to true to use live Azure tools."
+        : string.IsNullOrWhiteSpace(opts.Endpoint)
+            ? "No Azure MCP Server address is configured. Run the app through the Aspire AppHost, or set AzureMcp:Endpoint to the server URL."
+            : "No Azure MCP Server scope is configured. Set AzureMcp:Scopes to api://<azinventory-mcp client ID>/Mcp.Tools.Read.";
+
+    /// <summary>Turns a connection failure into the concrete fix; never includes exception text, which may contain tokens or URLs.</summary>
+    public static string DescribeFailure(Exception ex, AzureMcpOptions opts)
+    {
+        var chain = new List<Exception>();
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            chain.Add(e);
+            if (e is MicrosoftIdentityWebChallengeUserException { MsalUiRequiredException: { } msal }) chain.Add(msal);
+        }
+        bool HasCode(string code) => chain.Any(e => e.Message.Contains(code, StringComparison.Ordinal));
+
+        if (HasCode("AADSTS65001"))
+            return "Consent is missing for the Azure MCP Server (AADSTS65001). A tenant administrator must open Microsoft Entra ID > App registrations > " +
+                   "azinventory-web > API permissions, confirm azinventory-mcp / Mcp.Tools.Read is listed, and select 'Grant admin consent'. " +
+                   "Do the same in azinventory-mcp > API permissions for Azure Service Management / user_impersonation. Then sign out and sign in again.";
+        if (HasCode("AADSTS500011") || HasCode("AADSTS650057") || HasCode("AADSTS70011"))
+            return "The Azure MCP Server scope is not recognized by Microsoft Entra ID. Check that AzureMcp:Scopes is " +
+                   "api://<azinventory-mcp client ID>/Mcp.Tools.Read, that azinventory-mcp > Expose an API defines the Mcp.Tools.Read scope, " +
+                   "and that azinventory-web > API permissions includes it.";
+        if (chain.Any(e => e is MicrosoftIdentityWebChallengeUserException or Microsoft.Identity.Client.MsalUiRequiredException))
+            return "Your sign-in needs to be refreshed for the Azure MCP Server. Sign out and sign in again.";
+        if (chain.OfType<HttpRequestException>().FirstOrDefault(e => e.StatusCode is not null) is { StatusCode: { } status })
+            return status is System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden
+                ? $"The Azure MCP Server rejected the sign-in token ({(int)status}). Check that the AppHost parameters mcpTenantId and mcpClientId " +
+                  "match the azinventory-mcp app registration, then restart the AppHost."
+                : $"The Azure MCP Server returned HTTP {(int)status}. Check the azure-mcp resource logs in the Aspire dashboard.";
+        if (chain.Any(e => e is ServiceDiscoveryException))
+            return "The Azure MCP Server address could not be resolved. Run the app through the Aspire AppHost, or set AzureMcp:Endpoint to the server URL.";
+        if (chain.Any(e => e is HttpRequestException or System.Net.Sockets.SocketException))
+            return "The Azure MCP Server cannot be reached. In the Aspire dashboard, check that the azure-mcp resource is Running. If it is waiting for " +
+                   "mcpClientSecret, add Parameters:mcpClientSecret (a client secret of azinventory-mcp) to " +
+                   "BlazorAzureInventorySolution.AppHost/appsettings.Local.json and restart the AppHost.";
+        if (chain.Any(e => e is OperationCanceledException or TimeoutException))
+            return $"The Azure MCP Server did not respond within {opts.TimeoutSeconds} seconds. Check the azure-mcp resource logs in the Aspire dashboard, " +
+                   "or raise AzureMcp:TimeoutSeconds.";
+        return $"The Azure MCP Server could not be started ({ex.GetType().Name}). Check the azure-mcp resource logs in the Aspire dashboard.";
+    }
+
+    private sealed class ServiceDiscoveryException(string message) : InvalidOperationException(message);
 
     /// <summary>Resolves Aspire-style <c>https+http://name</c> endpoints from service discovery configuration.</summary>
     private Uri ResolveEndpoint(string endpoint)
@@ -131,7 +193,7 @@ public sealed class AzureMcpClientFactory(
                 return new Uri(new Uri(resolved), uri.PathAndQuery);
             }
         }
-        throw new InvalidOperationException($"No service discovery entry found for '{uri.Host}'.");
+        throw new ServiceDiscoveryException($"No service discovery entry found for '{uri.Host}'.");
     }
 
     public async ValueTask DisposeAsync()

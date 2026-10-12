@@ -45,6 +45,10 @@
         {
             <RadzenAlert AlertStyle="AlertStyle.Info" Shade="Shade.Lighter" AllowClose="false" Size="AlertSize.Small">
                 Live Azure tools unavailable. Answers use the last scan only.
+                @if (ChatService.LiveToolsUnavailableReason is { } reason)
+                {
+                    <div class="rz-mt-1">@reason</div>
+                }
             </RadzenAlert>
         }
 
