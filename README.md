@@ -63,7 +63,9 @@ dotnet user-secrets --project BlazorAzureInventory set "AI:DefaultProvider:ApiKe
 
 The AppHost asks for the `mcpTenantId` and `mcpClientId` parameters used by the MCP container's incoming authentication. When running locally it also asks for `mcpClientSecret` (an `azinventory-mcp` client secret the container uses for On-Behalf-Of); keep it in `appsettings.Local.json` or AppHost user secrets (`Parameters:mcpClientSecret`).
 
-When deploying to Azure Container Apps (`aspire deploy` or `azd up`), the AppHost also asks for `webClientId` (the `azinventory-web` client ID). No secrets are deployed: each app gets a user-assigned managed identity, so add a federated identity credential for that identity to the matching app registration. The web container app is named `azinventory-dev`; change it in [AppHost.cs](BlazorAzureInventorySolution.AppHost/AppHost.cs) for other environments.
+When deploying to Azure Container Apps (`aspire deploy` or `azd up`), the AppHost also asks for `webClientId` (the `azinventory-web` client ID). No secrets are deployed: each app gets a user-assigned managed identity, so add a federated identity credential for that identity to the matching app registration. The web container app name comes from `Deployment:WebAppName` (default `azinventory-web`).
+
+Organization-specific values (allowed tenants, bootstrap admins, subscription, resource group, registry, and app names) belong in the git-ignored `BlazorAzureInventorySolution.AppHost/appsettings.Org.json`; start from [appsettings.Org.sample.json](BlazorAzureInventorySolution.AppHost/appsettings.Org.sample.json). To deploy to an existing environment with `deploy/Publish-AzInventory.ps1`, see [Docs/deployment.md](Docs/deployment.md).
 
 ## Run
 
