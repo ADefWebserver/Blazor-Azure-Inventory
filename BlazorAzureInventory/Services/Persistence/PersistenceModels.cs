@@ -29,7 +29,8 @@ public sealed record SnapshotEnvelope(
     SnapshotSummary Summary,
     InventorySnapshot Snapshot)
 {
-    public const int CurrentSchemaVersion = 1;
+    // 2: StorageQueue and ExternalService kinds; older builds cannot deserialize them.
+    public const int CurrentSchemaVersion = 2;
 }
 
 public sealed record LastAccess(DateTimeOffset LastAccessUtc);
@@ -54,6 +55,7 @@ public sealed class UserPreferences
         if (LastPage is not null && !AllowedPages.Contains(LastPage)) LastPage = null;
         if (InventoryTab is { Length: > 100 }) InventoryTab = null;
         SelectedSubscriptionIds = SelectedSubscriptionIds.Where(id => Guid.TryParse(id, out _)).Distinct(StringComparer.OrdinalIgnoreCase).Take(1000).ToList();
+        if (GraphFilter is not null) GraphFilter.KnownNodeTypes = (GraphFilter.KnownNodeTypes ?? []).Where(t => t is { Length: <= 64 }).Take(100).ToList();
         return this;
     }
 }

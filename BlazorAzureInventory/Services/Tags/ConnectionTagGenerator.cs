@@ -13,7 +13,7 @@ namespace BlazorAzureInventory.Services.Tags;
 /// </summary>
 public sealed class ConnectionTagGenerator(IOptions<TaggingOptions> options)
 {
-    private static readonly HashSet<string> ChildEdges = [EdgeTypes.HostsDatabase, EdgeTypes.HasContainer, EdgeTypes.HasSlot];
+    private static readonly HashSet<string> ChildEdges = [EdgeTypes.HostsDatabase, EdgeTypes.HasContainer, EdgeTypes.HasQueue, EdgeTypes.HasSlot];
     private static readonly HashSet<string> ScopeTypes =
         [nameof(AzureResourceKind.Tenant), nameof(AzureResourceKind.Subscription), nameof(AzureResourceKind.ResourceGroup)];
 
@@ -51,7 +51,7 @@ public sealed class ConnectionTagGenerator(IOptions<TaggingOptions> options)
                 if (!o.IncludeLowConfidence && string.Equals(edge.Data.GetValueOrDefault("confidence")?.ToString(), "Low", StringComparison.OrdinalIgnoreCase)) continue;
                 if (!index.NodesById.TryGetValue(other(edge), out var target)) continue;
                 if (ScopeTypes.Contains(target.Type) || target.Data.ContainsKey("isAggregate")) continue;
-                if (!o.IncludeExternal && target.Type == nameof(AzureResourceKind.External)) continue;
+                if (!o.IncludeExternal && target.Type is nameof(AzureResourceKind.External) or nameof(AzureResourceKind.ExternalService)) continue;
 
                 var key = (order, target.Type);
                 if (!groups.TryGetValue(key, out var names)) groups[key] = names = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -158,7 +158,7 @@ public sealed class ConnectionTagGenerator(IOptions<TaggingOptions> options)
     /// </summary>
     public static string DisplayName(GraphIndex index, GraphNode node)
     {
-        if (node.Type is nameof(AzureResourceKind.SqlDatabase) or nameof(AzureResourceKind.BlobContainer))
+        if (node.Type is nameof(AzureResourceKind.SqlDatabase) or nameof(AzureResourceKind.BlobContainer) or nameof(AzureResourceKind.StorageQueue))
         {
             var parent = index.In(node.Id).FirstOrDefault(e => ChildEdges.Contains(e.Type));
             if (parent is not null && index.NodesById.TryGetValue(parent.Source, out var p)) return $"{p.Label}/{node.Label}";

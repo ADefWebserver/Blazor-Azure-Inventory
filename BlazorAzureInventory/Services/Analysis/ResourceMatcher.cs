@@ -11,6 +11,7 @@ public sealed class ResourceIndex
     internal Dictionary<string, AzureResourceInfo> SqlDatabases { get; } = new(StringComparer.OrdinalIgnoreCase);
     internal Dictionary<string, AzureResourceInfo> StorageAccounts { get; } = new(StringComparer.OrdinalIgnoreCase);
     internal Dictionary<string, AzureResourceInfo> BlobContainers { get; } = new(StringComparer.OrdinalIgnoreCase);
+    internal Dictionary<string, AzureResourceInfo> StorageQueues { get; } = new(StringComparer.OrdinalIgnoreCase);
     internal Dictionary<string, AzureResourceInfo> Cosmos { get; } = new(StringComparer.OrdinalIgnoreCase);
     internal Dictionary<string, AzureResourceInfo> Redis { get; } = new(StringComparer.OrdinalIgnoreCase);
     internal Dictionary<string, AzureResourceInfo> ServiceBus { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -46,6 +47,9 @@ public sealed class ResourceMatcher(CloudEndpointSuffixes suffixes)
                     break;
                 case AzureResourceKind.BlobContainer when r.ParentId is not null && index.ById.TryGetValue(r.ParentId, out var account):
                     index.BlobContainers[$"{account.Name}/{r.Name}"] = r;
+                    break;
+                case AzureResourceKind.StorageQueue when r.ParentId is not null && index.ById.TryGetValue(r.ParentId, out var queueAccount):
+                    index.StorageQueues[$"{queueAccount.Name}/{r.Name}"] = r;
                     break;
                 case AzureResourceKind.CosmosAccount:
                     AddHost(index.Cosmos, r);
@@ -99,6 +103,13 @@ public sealed class ResourceMatcher(CloudEndpointSuffixes suffixes)
                 }
                 match ??= Lookup(index.StorageAccounts, name);
                 break;
+            case ConnectionTargetKind.StorageQueue:
+                if (reference.ContainerName is { } queue)
+                {
+                    match = Lookup(index.StorageQueues, $"{name}/{queue}");
+                }
+                match ??= Lookup(index.StorageAccounts, name);
+                break;
             case ConnectionTargetKind.CosmosAccount:
                 match = Lookup(index.Cosmos, host);
                 break;
@@ -125,13 +136,53 @@ public sealed class ResourceMatcher(CloudEndpointSuffixes suffixes)
             : image;
 
     /// <summary>Resolves every connection and image reference of one app.</summary>
-    public AppConfigAnalysis Match(AppConfigAnalysis analysis, ResourceIndex index) => analysis with
+    public AppConfigAnalysis Match(AppConfigAnalysis analysis, ResourceIndex index)
     {
-        Entries = analysis.Entries
-            .Select(e => e with { References = e.References.Select(r => Match(r, index)).ToList() })
-            .ToList(),
-        Images = analysis.Images.Select(i => Match(i, index)).ToList()
-    };
+        var accounts = analysis.Entries
+            .Where(e => !e.IsOverridden)
+            .SelectMany(e => e.References)
+            .Where(r => r.Kind is ConnectionTargetKind.StorageAccount or ConnectionTargetKind.BlobContainer or ConnectionTargetKind.StorageQueue
+                        && r.Confidence != Confidence.Low && r.AccountOrServerName is not null)
+            .Select(r => r.AccountOrServerName!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return analysis with
+        {
+            Entries = analysis.Entries
+                .Select(e => e with { References = e.References.Select(r => IsHint(r) ? ConfirmHint(r, accounts, index) : Match(r, index)).ToList() })
+                .ToList(),
+            Images = analysis.Images.Select(i => Match(i, index)).ToList()
+        };
+    }
+
+    /// <summary>True when the index knows the container or queue <paramref name="name"/> in <paramref name="account"/>.</summary>
+    public static bool HasChild(ResourceIndex index, ConnectionTargetKind kind, string account, string name) =>
+        (kind == ConnectionTargetKind.StorageQueue ? index.StorageQueues : index.BlobContainers).ContainsKey($"{account}/{name}");
+
+    public static bool IsHint(ConnectionReference r) =>
+        r.Kind is ConnectionTargetKind.BlobContainer or ConnectionTargetKind.StorageQueue
+        && r.Confidence == Confidence.Low && r.ContainerName is not null;
+
+    /// <summary>
+    /// A name hint that matches a discovered container or queue (in the assigned account or another storage account of the same app)
+    /// is promoted to Medium. Otherwise it stays Low and points at the assigned storage account.
+    /// </summary>
+    private ConnectionReference ConfirmHint(ConnectionReference hint, IReadOnlyList<string> appAccounts, ResourceIndex index)
+    {
+        var map = hint.Kind == ConnectionTargetKind.StorageQueue ? index.StorageQueues : index.BlobContainers;
+        var assigned = Normalize(hint.AccountOrServerName);
+        var ordered = (assigned is null ? appAccounts : appAccounts.Prepend(assigned))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        foreach (var account in ordered)
+        {
+            if (Lookup(map, $"{Normalize(account)}/{hint.ContainerName}") is { } child)
+            {
+                return hint with { AccountOrServerName = account, ResolvedResourceId = child.Id, Confidence = Confidence.Medium };
+            }
+        }
+        return Match(hint, index);
+    }
 
     /// <summary>Stable ID for an unmatched reference, e.g. <c>external:sql:10.0.0.5/hr</c>.</summary>
     public static string ExternalNodeId(ConnectionReference r)
@@ -140,17 +191,20 @@ public sealed class ResourceMatcher(CloudEndpointSuffixes suffixes)
         var slug = r.Kind switch
         {
             ConnectionTargetKind.SqlServer or ConnectionTargetKind.SqlDatabase => "sql",
-            ConnectionTargetKind.StorageAccount or ConnectionTargetKind.BlobContainer => "storage",
+            ConnectionTargetKind.StorageAccount or ConnectionTargetKind.BlobContainer or ConnectionTargetKind.StorageQueue => "storage",
             ConnectionTargetKind.CosmosAccount => "cosmos",
             ConnectionTargetKind.RedisCache => "redis",
             ConnectionTargetKind.ServiceBusNamespace => "servicebus",
             ConnectionTargetKind.KeyVault => "keyvault",
             ConnectionTargetKind.ContainerRegistry => "registry",
+            ConnectionTargetKind.ExternalService => "service",
             _ => "other"
         };
-        var main = Normalize(r.Kind is ConnectionTargetKind.StorageAccount or ConnectionTargetKind.BlobContainer or ConnectionTargetKind.KeyVault
+        var main = Normalize(r.Kind is ConnectionTargetKind.StorageAccount or ConnectionTargetKind.BlobContainer or ConnectionTargetKind.StorageQueue
+                or ConnectionTargetKind.KeyVault or ConnectionTargetKind.ExternalService
             ? r.AccountOrServerName ?? r.Host
             : r.Host ?? r.AccountOrServerName) ?? "unknown";
+        if (r.Kind == ConnectionTargetKind.ExternalService) return $"external:service:{main}";
         var child = r.DatabaseName ?? r.ContainerName;
         return string.IsNullOrEmpty(child) ? $"external:{slug}:{main}" : $"external:{slug}:{main}/{child.ToLowerInvariant()}";
     }

@@ -69,7 +69,7 @@ public sealed class InventorySessionLoader(
             }
 
             var filtered = SnapshotAccessFilter.Filter(snapshot, accessible);
-            var graph = graphBuilder.Build(filtered.Snapshot, new GraphBuildOptions(inventoryOptions.Value.MaxBlobContainersPerAccount));
+            var graph = graphBuilder.Build(filtered.Snapshot, GraphBuildOptions.From(inventoryOptions.Value));
             var session = store.Get(user) ?? new InventorySession();
             session.Snapshot = filtered.Snapshot;
             session.Graph = graph;

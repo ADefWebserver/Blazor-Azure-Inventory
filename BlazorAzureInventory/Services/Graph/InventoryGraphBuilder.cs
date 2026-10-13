@@ -3,15 +3,21 @@ using System.Text;
 using BlazorAzureInventory.Models.Configuration;
 using BlazorAzureInventory.Models.Graph;
 using BlazorAzureInventory.Models.Inventory;
+using BlazorAzureInventory.Models.Options;
 using BlazorAzureInventory.Services.Analysis;
 
 namespace BlazorAzureInventory.Services.Graph;
 
-public sealed record GraphBuildOptions(int MaxBlobContainersPerAccount = 200);
+public sealed record GraphBuildOptions(int MaxBlobContainersPerAccount = 200, int MaxQueuesPerAccount = 200)
+{
+    public static GraphBuildOptions From(InventoryOptions o) => new(o.MaxBlobContainersPerAccount, o.MaxQueuesPerAccount);
+}
 
 /// <summary>Builds a directed, labeled property graph from an inventory snapshot. Deterministic for the same input.</summary>
-public sealed class InventoryGraphBuilder(ResourceMatcher matcher, ILogger<InventoryGraphBuilder> logger)
+public sealed class InventoryGraphBuilder(
+    ResourceMatcher matcher, ILogger<InventoryGraphBuilder> logger, ExternalServiceCatalog? catalog = null)
 {
+    private readonly ExternalServiceCatalog _catalog = catalog ?? ExternalServiceCatalog.Default;
     public GraphDocument Build(InventorySnapshot snapshot, GraphBuildOptions options)
     {
         var nodes = new Dictionary<string, GraphNode>(StringComparer.OrdinalIgnoreCase);
@@ -26,7 +32,9 @@ public sealed class InventoryGraphBuilder(ResourceMatcher matcher, ILogger<Inven
             .Where(id => id is not null)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var included = ApplyContainerCap(snapshot.Resources, referencedIds, options.MaxBlobContainersPerAccount, nodes, edges);
+        var included = ApplyChildCap(snapshot.Resources, referencedIds, nodes, edges,
+            (AzureResourceKind.BlobContainer, EdgeTypes.HasContainer, "blobservices/default/containers", "containers", options.MaxBlobContainersPerAccount),
+            (AzureResourceKind.StorageQueue, EdgeTypes.HasQueue, "queueservices/default/queues", "queues", options.MaxQueuesPerAccount));
 
         foreach (var r in included)
         {
@@ -41,6 +49,9 @@ public sealed class InventoryGraphBuilder(ResourceMatcher matcher, ILogger<Inven
                     break;
                 case AzureResourceKind.BlobContainer when r.ParentId is not null:
                     AddEdge(edges, r.ParentId, EdgeTypes.HasContainer, r.Id);
+                    break;
+                case AzureResourceKind.StorageQueue when r.ParentId is not null:
+                    AddEdge(edges, r.ParentId, EdgeTypes.HasQueue, r.Id);
                     break;
                 default:
                     AddEdge(edges, ResourceGroupId(r.SubscriptionId, r.ResourceGroup), EdgeTypes.Contains, r.Id);
@@ -133,36 +144,51 @@ public sealed class InventoryGraphBuilder(ResourceMatcher matcher, ILogger<Inven
         }
     }
 
+    public static string? ConfigAccessHint(ConfigAccessReason reason) => reason switch
+    {
+        ConfigAccessReason.MissingRole => $"Assign the {AzureRoleRequirements.WebsiteContributor} role on the app (or its resource group) to read config files.",
+        ConfigAccessReason.ScmAccessRestricted => "The SCM site's access restrictions block the scanner. Allow its outbound IP or VNet, or keep the ARM fallback enabled.",
+        ConfigAccessReason.ScmUnreachable => "The SCM site is not reachable from the scanner (private endpoint or DNS). Link the scanner VNet to the private DNS zone.",
+        ConfigAccessReason.AuthRejected => "The SCM site rejected the token although the role is present, for example because of Conditional Access.",
+        ConfigAccessReason.Unknown => "Config files could not be read and the cause could not be determined.",
+        _ => null
+    };
+
     private static Dictionary<string, string> CopyTags(IReadOnlyDictionary<string, string> tags) =>
         new(tags, StringComparer.OrdinalIgnoreCase);
 
-    private static List<AzureResourceInfo> ApplyContainerCap(
-        IReadOnlyList<AzureResourceInfo> resources, HashSet<string?> referencedIds, int cap,
-        Dictionary<string, GraphNode> nodes, Dictionary<string, GraphEdge> edges)
+    private static List<AzureResourceInfo> ApplyChildCap(
+        IReadOnlyList<AzureResourceInfo> resources, HashSet<string?> referencedIds,
+        Dictionary<string, GraphNode> nodes, Dictionary<string, GraphEdge> edges,
+        params (AzureResourceKind Kind, string EdgeType, string Path, string Noun, int Cap)[] children)
     {
-        var result = resources.Where(r => r.Kind != AzureResourceKind.BlobContainer).ToList();
+        var childKinds = children.Select(c => c.Kind).ToHashSet();
+        var result = resources.Where(r => !childKinds.Contains(r.Kind)).ToList();
 
-        foreach (var group in resources.Where(r => r.Kind == AzureResourceKind.BlobContainer && r.ParentId is not null)
-                     .GroupBy(r => r.ParentId!, StringComparer.OrdinalIgnoreCase))
+        foreach (var child in children)
         {
-            var ordered = group
-                .OrderByDescending(c => referencedIds.Contains(c.Id))
-                .ThenBy(c => c.Name, StringComparer.Ordinal)
-                .ToList();
-            var keep = ordered.Where((c, i) => i < cap || referencedIds.Contains(c.Id)).ToList();
-            result.AddRange(keep);
-
-            var remaining = ordered.Count - keep.Count;
-            if (remaining > 0)
+            foreach (var group in resources.Where(r => r.Kind == child.Kind && r.ParentId is not null)
+                         .GroupBy(r => r.ParentId!, StringComparer.OrdinalIgnoreCase))
             {
-                var first = group.First();
-                var id = $"{group.Key}/blobservices/default/containers/__more".ToLowerInvariant();
-                nodes[id] = new GraphNode
+                var ordered = group
+                    .OrderByDescending(c => referencedIds.Contains(c.Id))
+                    .ThenBy(c => c.Name, StringComparer.Ordinal)
+                    .ToList();
+                var keep = ordered.Where((c, i) => i < child.Cap || referencedIds.Contains(c.Id)).ToList();
+                result.AddRange(keep);
+
+                var remaining = ordered.Count - keep.Count;
+                if (remaining > 0)
                 {
-                    Id = id, Type = nameof(AzureResourceKind.BlobContainer), Label = $"+{remaining} more containers",
-                    Data = new() { ["isAggregate"] = true, ["subscriptionId"] = first.SubscriptionId, ["resourceGroup"] = first.ResourceGroup }
-                };
-                AddEdge(edges, group.Key, EdgeTypes.HasContainer, id);
+                    var first = group.First();
+                    var id = $"{group.Key}/{child.Path}/__more".ToLowerInvariant();
+                    nodes[id] = new GraphNode
+                    {
+                        Id = id, Type = child.Kind.ToString(), Label = $"+{remaining} more {child.Noun}",
+                        Data = new() { ["isAggregate"] = true, ["subscriptionId"] = first.SubscriptionId, ["resourceGroup"] = first.ResourceGroup }
+                    };
+                    AddEdge(edges, group.Key, child.EdgeType, id);
+                }
             }
         }
 
@@ -181,7 +207,7 @@ public sealed class InventoryGraphBuilder(ResourceMatcher matcher, ILogger<Inven
         };
         foreach (var (k, v) in r.Properties) data[k] = v;
         data[TagKeys.Tags] = CopyTags(r.Tags);
-        data[TagKeys.Taggable] = r.Kind != AzureResourceKind.BlobContainer;
+        data[TagKeys.Taggable] = r.Kind is not (AzureResourceKind.BlobContainer or AzureResourceKind.StorageQueue);
 
         var host = ResourceMatcher.HostOf(r.Endpoint);
         switch (r.Kind)
@@ -193,6 +219,12 @@ public sealed class InventoryGraphBuilder(ResourceMatcher matcher, ILogger<Inven
                     data["environment"] = analysis.Environment;
                     data["settingsStatus"] = analysis.SettingsStatus.ToString();
                     data["configFilesStatus"] = analysis.ConfigFilesStatus.ToString();
+                    if (analysis.ConfigFilesReason != ConfigAccessReason.None) data["configFilesReason"] = analysis.ConfigFilesReason.ToString();
+                    if (analysis.ConfigFilesStatus != ConfigReadStatus.Read && ConfigAccessHint(analysis.ConfigFilesReason) is { } hint)
+                        data["configFilesHint"] = hint;
+                    if (analysis.ConfigFilesVia != ConfigFilesRoute.None) data["configFilesVia"] = analysis.ConfigFilesVia.ToString();
+                    if (analysis.ConfigFilesRead.Count > 0) data["configFilesRead"] = string.Join(", ", analysis.ConfigFilesRead);
+                    if (analysis.ConfigFilesSkipped.Count > 0) data["configFilesSkipped"] = string.Join(", ", analysis.ConfigFilesSkipped);
                 }
                 break;
             case AzureResourceKind.ContainerApp:
@@ -223,7 +255,10 @@ public sealed class InventoryGraphBuilder(ResourceMatcher matcher, ILogger<Inven
         {
             foreach (var reference in entry.References)
             {
-                var targetId = reference.ResolvedResourceId ?? EnsureExternalNode(reference, nodes);
+                var targetId = reference.ResolvedResourceId
+                    ?? (reference.Kind == ConnectionTargetKind.ExternalService
+                        ? EnsureExternalServiceNode(reference, nodes)
+                        : EnsureExternalNode(reference, nodes));
                 var isSecret = reference.Kind == ConnectionTargetKind.KeyVault;
                 var edge = AddEdge(edges, analysis.AppId, isSecret ? EdgeTypes.ReferencesSecret : EdgeTypes.ConnectsTo, targetId);
 
@@ -269,6 +304,38 @@ public sealed class InventoryGraphBuilder(ResourceMatcher matcher, ILogger<Inven
             var edge = AddEdge(edges, analysis.AppId, EdgeTypes.PullsImageFrom, group.Key);
             edge.Data["repositories"] = group.Select(i => i.Repository).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(r => r).ToList();
         }
+    }
+
+    /// <summary>One shared node per external service, so every app that uses it connects to the same hub.</summary>
+    private string EnsureExternalServiceNode(ConnectionReference reference, Dictionary<string, GraphNode> nodes)
+    {
+        var id = ResourceMatcher.ExternalNodeId(reference);
+        if (!nodes.TryGetValue(id, out var node))
+        {
+            var def = _catalog.ById(reference.AccountOrServerName);
+            node = new GraphNode
+            {
+                Id = id,
+                Type = nameof(AzureResourceKind.ExternalService),
+                Label = def?.DisplayName ?? reference.AccountOrServerName ?? "External service",
+                Data = new()
+                {
+                    ["serviceId"] = reference.AccountOrServerName,
+                    ["category"] = def?.Category ?? "",
+                    ["color"] = def?.Color,
+                    ["matchedHosts"] = new List<string>(),
+                    [TagKeys.Taggable] = false
+                }
+            };
+            nodes[id] = node;
+        }
+
+        if (reference.Host is { } host && node.Data["matchedHosts"] is List<string> hosts && !hosts.Contains(host, StringComparer.OrdinalIgnoreCase))
+        {
+            hosts.Add(host);
+            hosts.Sort(StringComparer.Ordinal);
+        }
+        return id;
     }
 
     private string EnsureExternalNode(ConnectionReference reference, Dictionary<string, GraphNode> nodes)

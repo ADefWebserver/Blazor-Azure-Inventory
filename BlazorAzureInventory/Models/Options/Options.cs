@@ -12,14 +12,73 @@ public sealed class InventoryOptions
     public string[] ConfigFilePatterns { get; set; } = [];
     [Range(1024, 16 * 1024 * 1024)] public int MaxConfigFileBytes { get; set; } = 1024 * 1024;
     [Range(1, 5000)] public int MaxBlobContainersPerAccount { get; set; } = 200;
+    [Range(1, 5000)] public int MaxQueuesPerAccount { get; set; } = 200;
     public string[] ScmHostSuffixes { get; set; } = [];
     public CloudEndpointSuffixOptions CloudEndpointSuffixes { get; set; } = new();
 
+    /// <summary>Reads config files through ARM (<c>{siteId}/extensions/api/vfs</c>) when the SCM site is blocked or unreachable.</summary>
+    public bool UseArmKuduFallback { get; set; } = true;
+
+    /// <summary>Alternative environment names, for example Production = [Prod, Prd]. Matching works in both directions.</summary>
+    public Dictionary<string, string[]> EnvironmentAliases { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public StorageNameHintOptions StorageNameHints { get; set; } = new();
+    public ExternalServiceDefinition[] ExternalServices { get; set; } = [];
+
     public IReadOnlyList<string> EffectiveConfigFilePatterns =>
-        ConfigFilePatterns.Length > 0 ? ConfigFilePatterns : ["appsettings.json", "appsettings.*.json"];
+        ConfigFilePatterns.Length > 0 ? ConfigFilePatterns : ["appsettings*.json"];
 
     public IReadOnlyList<string> EffectiveScmHostSuffixes =>
         ScmHostSuffixes.Length > 0 ? ScmHostSuffixes : [".azurewebsites.net", ".appserviceenvironment.net"];
+
+    public IReadOnlyDictionary<string, string[]> EffectiveEnvironmentAliases =>
+        EnvironmentAliases.Count > 0
+            ? EnvironmentAliases
+            : new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Production"] = ["Prod", "Prd"],
+                ["Development"] = ["Dev"],
+                ["Staging"] = ["Stage", "Stg"],
+                ["Test"] = ["Tst", "QA"]
+            };
+
+    public IReadOnlyList<ExternalServiceDefinition> EffectiveExternalServices =>
+        ExternalServices.Length > 0 ? ExternalServices : [ExternalServiceDefinition.SendGrid];
+}
+
+/// <summary>Arrays default to empty because the configuration binder appends to pre-populated arrays.</summary>
+public sealed class StorageNameHintOptions
+{
+    public string[] ContainerKeywords { get; set; } = [];
+    public string[] QueueKeywords { get; set; } = [];
+
+    public IReadOnlyList<string> EffectiveContainerKeywords => ContainerKeywords.Length > 0 ? ContainerKeywords : ["Container", "Blob"];
+    public IReadOnlyList<string> EffectiveQueueKeywords => QueueKeywords.Length > 0 ? QueueKeywords : ["Queue"];
+}
+
+/// <summary>A non-Azure service detected from configuration, shown as one shared graph node.</summary>
+public sealed class ExternalServiceDefinition
+{
+    [Required, RegularExpression("^[a-z0-9-]{2,40}$")] public string Id { get; set; } = "";
+    [Required, StringLength(60)] public string DisplayName { get; set; } = "";
+    [StringLength(60)] public string Category { get; set; } = "";
+    [RegularExpression("^#[0-9A-Fa-f]{6}$")] public string Color { get; set; } = "#607D8B";
+
+    /// <summary>Matched on a label boundary: the host equals the suffix or ends with "." + suffix.</summary>
+    public string[] HostSuffixes { get; set; } = [];
+
+    /// <summary>Matched when the last setting-key segment contains the keyword. Values are never inspected.</summary>
+    public string[] KeyKeywords { get; set; } = [];
+
+    public static ExternalServiceDefinition SendGrid => new()
+    {
+        Id = "sendgrid",
+        DisplayName = "SendGrid",
+        Category = "Email",
+        Color = "#1A82E2",
+        HostSuffixes = ["sendgrid.net", "sendgrid.com"],
+        KeyKeywords = ["SendGrid"]
+    };
 }
 
 /// <summary>Arrays default to empty because the configuration binder appends to pre-populated arrays.</summary>

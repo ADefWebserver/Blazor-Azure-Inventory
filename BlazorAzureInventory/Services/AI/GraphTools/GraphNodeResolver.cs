@@ -5,7 +5,7 @@ namespace BlazorAzureInventory.Services.AI.GraphTools;
 /// <summary>Resolves tool arguments (IDs or names) to graph nodes.</summary>
 public static class GraphNodeResolver
 {
-    private static readonly HashSet<string> ChildEdges = [EdgeTypes.HostsDatabase, EdgeTypes.HasContainer];
+    private static readonly IReadOnlySet<string> ChildEdges = EdgeTypes.Children;
 
     /// <summary>Resolves by ID, "parent/child" label, exact label, then partial label (for read-only lookups).</summary>
     public static IEnumerable<GraphNode> Resolve(GraphIndex index, string idOrName)

@@ -717,7 +717,7 @@ The page uses `RadzenLayout` content with the following elements:
 | Source | Applies To | How It Is Read | Notes |
 |---|---|---|---|
 | `appsettings.json` | Web Apps, Slots | Kudu VFS: `GET https://{scm-host}/api/vfs/site/wwwroot/appsettings.json` | Optional. Missing files are not an error |
-| `appsettings.{Environment}.json` | Web Apps, Slots | Kudu VFS directory listing of `site/wwwroot/`, filtered by `ConfigFilePatterns` | The environment name comes from `ASPNETCORE_ENVIRONMENT`, `DOTNET_ENVIRONMENT`, or `AZURE_FUNCTIONS_ENVIRONMENT`, defaulting to `Production` |
+| `appsettings.{Environment}.json` | Web Apps, Slots | Kudu VFS directory listing of `site/wwwroot/`, filtered by `ConfigFilePatterns` (default `appsettings*.json`) | The environment name comes from `ASPNETCORE_ENVIRONMENT`, `DOTNET_ENVIRONMENT`, or `AZURE_FUNCTIONS_ENVIRONMENT`, defaulting to `Production`. `ConfigFileResolver` accepts `appsettings.{env}.json`, `appsettings{env}.json` (for example `appsettingsProduction.json`), and the aliases in `Inventory:EnvironmentAliases` (for example `Prod`). Other matching files are listed as skipped |
 | App Service app settings | Web Apps, Function Apps, Slots | ARM `GetApplicationSettings*` | Become environment variables. `__` maps to `:` |
 | App Service connection strings | Web Apps, Function Apps, Slots | ARM `GetConnectionStrings*` | Surface as `ConnectionStrings:{name}` in .NET configuration |
 | Container App env vars | Container Apps | ARM `ContainerAppData.Template.Containers[*].Env` | `Value` (inline) or `SecretRef` (name only) |
@@ -740,8 +740,9 @@ Rules:
 2. **Auth.** `Authorization: Bearer {ARM-audience token}` from the user's `UserTokenCredential`. Basic auth and publishing profiles are **never** used.
 3. **Redirects** are disabled (`AllowAutoRedirect = false`). A 3xx response is treated as an error.
 4. **Limits.** Per-request timeout of 15 s, `MaxConfigFileBytes` (default 1 MB), and only `.json` files that match `ConfigFilePatterns`.
-5. **Outcomes.** A 401/403 or network-restricted SCM sets `ConfigFilesStatus = AccessDenied`. A 404 sets `NotFound`. Either way, the scan continues.
-6. **Known limitations** (shown in the UI tooltip): custom-container Web Apps usually have no `wwwroot` content. Apps whose SCM site is reachable only through a private endpoint cannot be read.
+5. **Outcomes.** A 401/403 or network-restricted SCM sets `ConfigFilesStatus = AccessDenied`. A 404 sets `NotFound`. Either way, the scan continues. After an access failure, `ScmAccessDiagnostics` sets `ConfigFilesReason` (`MissingRole`, `ScmAccessRestricted`, `ScmUnreachable`, `AuthRejected`, or `Unknown`) from ARM metadata only, and only `MissingRole` issues name the Website Contributor permission.
+6. **ARM tunnel fallback.** Unless the reason is `MissingRole`, the files are retried through `https://management.azure.com{siteId}/extensions/api/vfs/site/wwwroot/` (`Inventory:UseArmKuduFallback`, default on). Site IDs are validated against a strict regex, and the same limits apply. `configFilesVia` records `Direct` or `ArmTunnel`.
+7. **Known limitations** (shown in the UI tooltip): custom-container Web Apps usually have no `wwwroot` content. See [knowledge-graph-connections-plan.md](knowledge-graph-connections-plan.md) for details.
 
 ### 8.3 Flattening and Precedence
 
@@ -1020,6 +1021,8 @@ public sealed class GraphEdge
 | ContainerRegistry | ARM ID | Registry name | `loginServer`, `sku` |
 | CosmosAccount / RedisCache / ServiceBusNamespace / KeyVault | ARM ID | Name | `endpointHost` |
 | External | `external:{kind}:{host}[/{db or container}]` | Host or account | `kind`, `isLocalEmulator`, `reason` (`NotVisible`, `NotAzure`, `Unknown`) |
+| StorageQueue | ARM ID (`.../queueservices/default/queues/{name}`) | Queue name | not taggable |
+| ExternalService | `external:service:{id}` (one shared node per catalog entry, for example SendGrid) | Display name | `serviceId`, `category`, `color`, `matchedHosts` |
 
 ### 10.3 Edge Types
 
@@ -1029,7 +1032,8 @@ public sealed class GraphEdge
 | `HAS_SLOT` | WebApp/FunctionApp to WebAppSlot | Inventory | none |
 | `HOSTS_DATABASE` | SqlServer to SqlDatabase | Inventory | none |
 | `HAS_CONTAINER` | StorageAccount to BlobContainer | Enrichment | none |
-| `CONNECTS_TO` | App (WebApp, FunctionApp, Slot, ContainerApp) to SqlDatabase, SqlServer, StorageAccount, BlobContainer, CosmosAccount, RedisCache, ServiceBusNamespace, External | Effective config entries | `references`: list of `{ settingKey, source, fileName, environment, confidence, isIdentityBased, unresolvedDatabase }` |
+| `HAS_QUEUE` | StorageAccount to StorageQueue | Enrichment | none |
+| `CONNECTS_TO` | App (WebApp, FunctionApp, Slot, ContainerApp) to SqlDatabase, SqlServer, StorageAccount, BlobContainer, StorageQueue, CosmosAccount, RedisCache, ServiceBusNamespace, ExternalService, External | Effective config entries | `references`: list of `{ settingKey, source, fileName, environment, confidence, isIdentityBased, unresolvedDatabase }` |
 | `REFERENCES_SECRET` | App to KeyVault | Key Vault references and Container App Key Vault secrets | `references`: list of `{ settingKey, secretName }` |
 | `PULLS_IMAGE_FROM` | ContainerApp/WebApp to ContainerRegistry | Container images / `LinuxFxVersion` | `repositories` (repo names only, no tags with digests) |
 
@@ -1509,9 +1513,14 @@ The Blazor app reads `AzureMcp:Endpoint = "https+http://azure-mcp"`. This value 
     "IncludeSlots": true,
     "IncludeFunctionApps": true,
     "ReadConfigFiles": true,
-    "ConfigFilePatterns": [ "appsettings.json", "appsettings.*.json" ],
+    "ConfigFilePatterns": [ "appsettings*.json" ],
+    "UseArmKuduFallback": true,
+    "EnvironmentAliases": { "Production": [ "Prod", "Prd" ], "Development": [ "Dev" ], "Staging": [ "Stage", "Stg" ], "Test": [ "Tst", "QA" ] },
     "MaxConfigFileBytes": 1048576,
     "MaxBlobContainersPerAccount": 200,
+    "MaxQueuesPerAccount": 200,
+    "StorageNameHints": { "ContainerKeywords": [ "Container", "Blob" ], "QueueKeywords": [ "Queue" ] },
+    "ExternalServices": [ { "Id": "sendgrid", "DisplayName": "SendGrid", "Category": "Email", "Color": "#1A82E2", "HostSuffixes": [ "sendgrid.net", "sendgrid.com" ], "KeyKeywords": [ "SendGrid" ] } ],
     "ScmHostSuffixes": [ ".azurewebsites.net", ".appserviceenvironment.net" ],
     "CloudEndpointSuffixes": {
       "Sql": [ ".database.windows.net" ],

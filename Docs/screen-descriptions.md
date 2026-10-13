@@ -306,10 +306,12 @@ A `RadzenSplitter` with three resizable, collapsible panes.
 | SqlDatabase | smaller cylinder | `#66BB6A` |
 | StorageAccount | ellipse | `#7B1FA2` |
 | BlobContainer | dot | `#CE93D8` |
+| StorageQueue | small square | `#AB47BC` |
 | CosmosAccount | ellipse | `#5C6BC0` |
 | RedisCache | ellipse | `#D32F2F` |
 | ServiceBusNamespace | ellipse | `#455A64` |
 | KeyVault | triangle | `#C8A400` |
+| ExternalService (for example SendGrid) | large box with name and category, one shared node per service | per-service color (SendGrid `#1A82E2`) |
 | External | ellipse with dashed border | `#9E9E9E` |
 | Tenant / Subscription / ResourceGroup | outlined box | `#BDBDBD` |
 
@@ -318,7 +320,7 @@ A `RadzenSplitter` with three resizable, collapsible panes.
 | CONNECTS_TO | solid with arrow |
 | REFERENCES_SECRET | dashed gold |
 | PULLS_IMAGE_FROM | dotted teal |
-| CONTAINS, HAS_SLOT, HOSTS_DATABASE, HAS_CONTAINER | thin gray |
+| CONTAINS, HAS_SLOT, HOSTS_DATABASE, HAS_CONTAINER, HAS_QUEUE | thin gray |
 | Low-confidence edge | dashed, 50% opacity |
 
 - Hovering a node shows a plain-text tooltip with the name and type.

@@ -11,7 +11,8 @@ public enum AzureResourceKind
     StorageAccount, BlobContainer,
     ContainerApp, ContainerRegistry,
     CosmosAccount, RedisCache, ServiceBusNamespace, KeyVault,
-    External
+    External,
+    StorageQueue, ExternalService
 }
 
 public sealed record AzureResourceInfo(
@@ -74,16 +75,27 @@ public sealed record ScanRequest(IReadOnlyList<TenantInfo> Tenants, IReadOnlyLis
 
 public sealed record ScanProgress(string Stage, int Completed, int Total, string? CurrentItem)
 {
+    public const string ResolvingSubscriptions = "Resolving subscriptions";
+    public const string QueryingResourceGraph = "Querying Resource Graph";
+    public const string ListingBlobContainers = "Listing blob containers";
+    public const string ListingStorageQueues = "Listing storage queues";
+    public const string ReadingAppSettings = "Reading app settings";
+    public const string ReadingConfigFiles = "Reading config files";
+    public const string ReadingContainerApps = "Reading Container Apps";
+    public const string AnalyzingConnections = "Analyzing connections";
+    public const string BuildingGraph = "Building graph";
+
     public static readonly string[] Stages =
     [
-        "Resolving subscriptions",
-        "Querying Resource Graph",
-        "Listing blob containers",
-        "Reading app settings",
-        "Reading config files",
-        "Reading Container Apps",
-        "Analyzing connections",
-        "Building graph"
+        ResolvingSubscriptions,
+        QueryingResourceGraph,
+        ListingBlobContainers,
+        ListingStorageQueues,
+        ReadingAppSettings,
+        ReadingConfigFiles,
+        ReadingContainerApps,
+        AnalyzingConnections,
+        BuildingGraph
     ];
 
     public double OverallPercent

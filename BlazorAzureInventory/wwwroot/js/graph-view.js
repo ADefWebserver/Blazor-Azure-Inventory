@@ -22,10 +22,12 @@ const NODE_STYLES = {
     SqlDatabase: { shape: 'image', color: '#66BB6A', size: 'small', image: cylinder('#66BB6A', '#A5D6A7') },
     StorageAccount: { shape: 'ellipse', color: '#7B1FA2' },
     BlobContainer: { shape: 'dot', color: '#CE93D8' },
+    StorageQueue: { shape: 'square', color: '#AB47BC', size: 'small' },
     CosmosAccount: { shape: 'ellipse', color: '#5C6BC0' },
     RedisCache: { shape: 'ellipse', color: '#D32F2F' },
     ServiceBusNamespace: { shape: 'ellipse', color: '#455A64' },
     KeyVault: { shape: 'triangle', color: '#C8A400' },
+    ExternalService: { shape: 'box', color: '#607D8B', size: 'large' },
     External: { shape: 'ellipse', color: '#9E9E9E', dashed: true },
     Tenant: { shape: 'box', color: '#BDBDBD', outline: true },
     Subscription: { shape: 'box', color: '#BDBDBD', outline: true },
@@ -33,7 +35,8 @@ const NODE_STYLES = {
 };
 
 const LABEL_INSIDE = new Set(['box', 'ellipse', 'database', 'circle', 'text']);
-const STRUCTURAL = new Set(['CONTAINS', 'HAS_SLOT', 'HOSTS_DATABASE', 'HAS_CONTAINER']);
+const STRUCTURAL = new Set(['CONTAINS', 'HAS_SLOT', 'HOSTS_DATABASE', 'HAS_CONTAINER', 'HAS_QUEUE']);
+const HEX_COLOR = /^#[0-9A-Fa-f]{6}$/;
 // Node types that have no properties popup.
 const NO_DETAILS = new Set(['Tenant']);
 const INFO_ICON_RADIUS = 8;
@@ -295,6 +298,16 @@ function toVisNode(n, shadow) {
         shadow: shadow ? { enabled: true, color: 'rgba(15,23,42,0.18)', size: 6, x: 0, y: 2 } : false
     };
     if (style.image) node.image = style.image;
+    if (style.size === 'large') {
+        // Shared external services are hubs: bigger, heavier, and colored per service (validated hex only).
+        const color = HEX_COLOR.test(n.data?.color ?? '') ? n.data.color : style.color;
+        node.color = { background: color, border: color, highlight: { background: color, border: '#1f2937' }, hover: { background: color, border: '#1f2937' } };
+        node.label = n.data?.category ? `${shortLabel(n.label)}\n${shortLabel(n.data.category)}` : shortLabel(n.label);
+        node.font = { color: '#ffffff', size: 22 };
+        node.margin = { top: 16, bottom: 16, left: 22, right: 22 };
+        node.borderWidth = 3;
+        node.mass = 4;
+    }
     if (style.dashed) {
         node.color = { background: '#f3f4f6', border: style.color, highlight: { background: '#e5e7eb', border: '#4b5563' }, hover: { background: '#e5e7eb', border: '#4b5563' } };
         node.font = { color: '#374151', size: 12 };

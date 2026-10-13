@@ -45,9 +45,12 @@ public sealed class StorageRow
     public string HnsEnabled => Resource.Prop("hnsEnabled") ?? "No";
     public string Location => Resource.Location;
     public int Containers => ContainerRows.Count;
+    public int Queues => QueueRows.Count;
     public bool Truncated => Resource.Prop("containersTruncated") == "true";
+    public bool QueuesTruncated => Resource.Prop("queuesTruncated") == "true";
     public int Consumers { get; init; }
     public List<ChildRow> ContainerRows { get; } = new();
+    public List<ChildRow> QueueRows { get; } = new();
 }
 
 public sealed class ChildRow
@@ -172,6 +175,13 @@ public sealed class InventoryView
                 account.ContainerRows.Add(new ChildRow { Resource = c, Consumers = Consumers(c.Id) });
             }
         }
+        foreach (var q in snapshot.Resources.Where(r => r.Kind == AzureResourceKind.StorageQueue))
+        {
+            if (q.ParentId is not null && accounts.TryGetValue(q.ParentId, out var account))
+            {
+                account.QueueRows.Add(new ChildRow { Resource = q, Consumers = Consumers(q.Id) });
+            }
+        }
 
         foreach (var r in snapshot.Resources.Where(r => r.Kind == AzureResourceKind.ContainerApp))
         {
@@ -215,7 +225,7 @@ public sealed class InventoryView
         {
             var targets = new List<string> { edge.Target };
             targets.AddRange(index.In(edge.Target)
-                .Where(e => e.Type is EdgeTypes.HostsDatabase or EdgeTypes.HasContainer)
+                .Where(e => EdgeTypes.Children.Contains(e.Type))
                 .Select(e => e.Source));
             foreach (var t in targets)
             {

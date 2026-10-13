@@ -30,7 +30,7 @@ public sealed record ResourceDetails(
 /// <summary>Builds read-only view models for the Resource Properties popup from the user's session.</summary>
 public sealed class ResourceInspector(InventorySessionStore store, UserContextAccessor userContext, ITagPermissionChecker permissions)
 {
-    private static readonly HashSet<string> HiddenProperties = new(StringComparer.OrdinalIgnoreCase) { TagKeys.Taggable };
+    private static readonly HashSet<string> HiddenProperties = new(StringComparer.OrdinalIgnoreCase) { TagKeys.Taggable, "color" };
 
     public async Task<ResourceDetails?> GetAsync(string? resourceId)
     {
@@ -54,7 +54,9 @@ public sealed class ResourceInspector(InventorySessionStore store, UserContextAc
         var reason = taggable ? null : node.Type switch
         {
             nameof(AzureResourceKind.BlobContainer) => "Blob containers do not support Azure tags (they use container metadata instead).",
+            nameof(AzureResourceKind.StorageQueue) => "Storage queues do not support Azure tags (they use queue metadata instead).",
             nameof(AzureResourceKind.External) => "This target is outside the scanned subscriptions.",
+            nameof(AzureResourceKind.ExternalService) => "External service outside Azure, detected from app configuration.",
             nameof(AzureResourceKind.Tenant) => "Tenants cannot be tagged.",
             _ => "This item cannot be tagged."
         };
@@ -87,10 +89,11 @@ public sealed class ResourceInspector(InventorySessionStore store, UserContextAc
             ? $"https://portal.azure.com/#@{node.Data.GetValueOrDefault("tenantId")}/resource{node.Id}"
             : null;
 
-    /// <summary>Scalar node data, sorted by key. Tags and internal flags are excluded.</summary>
+    /// <summary>Scalar node data (and string lists), sorted by key. Tags and internal flags are excluded.</summary>
     public static List<KeyValuePair<string, string>> BuildProperties(GraphNode node) =>
         node.Data
             .Where(kv => !HiddenProperties.Contains(kv.Key))
+            .Select(kv => kv.Value is List<string> list ? new KeyValuePair<string, object?>(kv.Key, string.Join(", ", list)) : kv)
             .Where(kv => kv.Value is string or bool or int or long or double)
             .Where(kv => kv.Value is not string s || s.Length > 0)
             .Select(kv => new KeyValuePair<string, string>(kv.Key, kv.Value!.ToString()!))

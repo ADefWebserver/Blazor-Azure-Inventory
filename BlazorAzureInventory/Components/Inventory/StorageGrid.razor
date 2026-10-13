@@ -6,20 +6,42 @@
         {
             <RadzenText TextStyle="TextStyle.Caption" class="muted">Container list truncated at the configured maximum.</RadzenText>
         }
-        <RadzenDataGrid TItem="ChildRow" Data="@account.ContainerRows" AllowSorting="true" AllowPaging="true" PageSize="10" AllowColumnResize="true">
-            <Columns>
-                <RadzenDataGridColumn Property="@nameof(ChildRow.Name)" Title="Container">
-                    <Template Context="c"><ResourceLink Id="@c.Resource.Id" Text="@c.Name" /></Template>
-                </RadzenDataGridColumn>
-                <RadzenDataGridColumn Property="@nameof(ChildRow.PublicAccess)" Title="Public access" Width="140px" />
-                <RadzenDataGridColumn Property="@nameof(ChildRow.LastModified)" Title="Last modified (UTC)" Width="180px" />
-                <RadzenDataGridColumn Property="@nameof(ChildRow.Consumers)" Title="Consumers" Width="120px">
-                    <Template Context="c">
-                        <RadzenLink Text="@c.Consumers.ToString()" Path="@($"graph?focus={Uri.EscapeDataString(c.Resource.Id)}")" title="Show in graph" />
-                    </Template>
-                </RadzenDataGridColumn>
-            </Columns>
-        </RadzenDataGrid>
+        @if (account.ContainerRows.Count > 0)
+        {
+            <RadzenDataGrid TItem="ChildRow" Data="@account.ContainerRows" AllowSorting="true" AllowPaging="true" PageSize="10" AllowColumnResize="true">
+                <Columns>
+                    <RadzenDataGridColumn Property="@nameof(ChildRow.Name)" Title="Container">
+                        <Template Context="c"><ResourceLink Id="@c.Resource.Id" Text="@c.Name" /></Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn Property="@nameof(ChildRow.PublicAccess)" Title="Public access" Width="140px" />
+                    <RadzenDataGridColumn Property="@nameof(ChildRow.LastModified)" Title="Last modified (UTC)" Width="180px" />
+                    <RadzenDataGridColumn Property="@nameof(ChildRow.Consumers)" Title="Consumers" Width="120px">
+                        <Template Context="c">
+                            <RadzenLink Text="@c.Consumers.ToString()" Path="@($"graph?focus={Uri.EscapeDataString(c.Resource.Id)}")" title="Show in graph" />
+                        </Template>
+                    </RadzenDataGridColumn>
+                </Columns>
+            </RadzenDataGrid>
+        }
+        @if (account.QueuesTruncated)
+        {
+            <RadzenText TextStyle="TextStyle.Caption" class="muted">Queue list truncated at the configured maximum.</RadzenText>
+        }
+        @if (account.QueueRows.Count > 0)
+        {
+            <RadzenDataGrid TItem="ChildRow" Data="@account.QueueRows" AllowSorting="true" AllowPaging="true" PageSize="10" AllowColumnResize="true">
+                <Columns>
+                    <RadzenDataGridColumn Property="@nameof(ChildRow.Name)" Title="Queue">
+                        <Template Context="q"><ResourceLink Id="@q.Resource.Id" Text="@q.Name" /></Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn Property="@nameof(ChildRow.Consumers)" Title="Consumers" Width="120px">
+                        <Template Context="q">
+                            <RadzenLink Text="@q.Consumers.ToString()" Path="@($"graph?focus={Uri.EscapeDataString(q.Resource.Id)}")" title="Show in graph" />
+                        </Template>
+                    </RadzenDataGridColumn>
+                </Columns>
+            </RadzenDataGrid>
+        }
     </Template>
     <Columns>
         <RadzenDataGridColumn Property="@nameof(StorageRow.Account)" Title="Account">
@@ -30,6 +52,7 @@
         <RadzenDataGridColumn Property="@nameof(StorageRow.HnsEnabled)" Title="HNS enabled" Width="130px" />
         <RadzenDataGridColumn Property="@nameof(StorageRow.Location)" Title="Location" Width="120px" />
         <RadzenDataGridColumn Property="@nameof(StorageRow.Containers)" Title="Containers" Width="120px" />
+        <RadzenDataGridColumn Property="@nameof(StorageRow.Queues)" Title="Queues" Width="100px" />
         <RadzenDataGridColumn Property="@nameof(StorageRow.Consumers)" Title="Consumers" Width="120px">
             <Template Context="a">
                 <RadzenLink Text="@a.Consumers.ToString()" Path="@($"graph?focus={Uri.EscapeDataString(a.Resource.Id)}")" title="Show in graph" />
@@ -45,5 +68,6 @@
     [Parameter] public IEnumerable<StorageRow> Data { get; set; } = [];
     [Parameter] public bool IsLoading { get; set; }
 
-    private static void RowRender(RowRenderEventArgs<StorageRow> args) => args.Expandable = args.Data?.ContainerRows.Count > 0;
+    private static void RowRender(RowRenderEventArgs<StorageRow> args) =>
+        args.Expandable = args.Data?.ContainerRows.Count > 0 || args.Data?.QueueRows.Count > 0;
 }

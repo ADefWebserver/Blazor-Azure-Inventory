@@ -21,19 +21,22 @@ public static class AzureRoleRequirements
     public const string WebsiteContributor = "Website Contributor";
     public const string Alternatives = "Contributor or Owner";
 
-    public static readonly RoleRequirement ResourceGraph = new(ScanProgress.Stages[1],
+    public static readonly RoleRequirement ResourceGraph = new(ScanProgress.QueryingResourceGraph,
         "List subscriptions, resource groups, and resources", Reader, "*/read");
 
-    public static readonly RoleRequirement BlobContainers = new(ScanProgress.Stages[2],
+    public static readonly RoleRequirement BlobContainers = new(ScanProgress.ListingBlobContainers,
         "List blob containers", Reader, "Microsoft.Storage/storageAccounts/blobServices/containers/read");
 
-    public static readonly RoleRequirement AppSettings = new(ScanProgress.Stages[3],
+    public static readonly RoleRequirement StorageQueues = new(ScanProgress.ListingStorageQueues,
+        "List storage queues", Reader, "Microsoft.Storage/storageAccounts/queueServices/queues/read");
+
+    public static readonly RoleRequirement AppSettings = new(ScanProgress.ReadingAppSettings,
         "Read App Service app settings and connection strings", WebsiteContributor, "Microsoft.Web/sites/config/list/action");
 
-    public static readonly RoleRequirement ConfigFiles = new(ScanProgress.Stages[4],
+    public static readonly RoleRequirement ConfigFiles = new(ScanProgress.ReadingConfigFiles,
         "Read appsettings*.json files through the SCM (Kudu) site", WebsiteContributor, "Microsoft.Web/sites/publish/action");
 
-    public static readonly RoleRequirement ContainerApps = new(ScanProgress.Stages[5],
+    public static readonly RoleRequirement ContainerApps = new(ScanProgress.ReadingContainerApps,
         "Read Container Apps environment variables", Reader, "Microsoft.App/containerApps/read");
 
     public const string TagContributor = "Tag Contributor";
@@ -42,7 +45,7 @@ public static class AzureRoleRequirements
     public static readonly RoleRequirement EditTags = new("Editing tags",
         "Edit tags (optional)", TagContributor, "Microsoft.Resources/tags/write");
 
-    public static IReadOnlyList<RoleRequirement> All { get; } = [ResourceGraph, BlobContainers, AppSettings, ConfigFiles, ContainerApps, EditTags];
+    public static IReadOnlyList<RoleRequirement> All { get; } = [ResourceGraph, BlobContainers, StorageQueues, AppSettings, ConfigFiles, ContainerApps, EditTags];
 
     public static RoleRequirement? ForStage(string stage) =>
         All.FirstOrDefault(r => string.Equals(r.Stage, stage, StringComparison.Ordinal));

@@ -105,8 +105,7 @@
     private void RestoreFilter(GraphFilterState? saved)
     {
         if (saved is null) return;
-        var known = NodeTypeStyles.All.Select(t => t.Type).ToHashSet(StringComparer.Ordinal);
-        _filter.NodeTypes = saved.NodeTypes.Where(known.Contains).ToList();
+        _filter.NodeTypes = NodeTypeStyles.RestoreVisibleTypes(saved);
         _filter.Subscriptions = saved.Subscriptions.ToList();
         _filter.ResourceGroups = saved.ResourceGroups.ToList();
         _filter.OnlyConnected = saved.OnlyConnected;
@@ -132,6 +131,7 @@
         await Preferences.UpdateAsync(p => p.GraphFilter = new GraphFilterState
         {
             NodeTypes = _filter.NodeTypes.ToList(),
+            KnownNodeTypes = NodeTypeStyles.All.Select(t => t.Type).ToList(),
             Subscriptions = _filter.Subscriptions.ToList(),
             ResourceGroups = _filter.ResourceGroups.ToList(),
             OnlyConnected = _filter.OnlyConnected,

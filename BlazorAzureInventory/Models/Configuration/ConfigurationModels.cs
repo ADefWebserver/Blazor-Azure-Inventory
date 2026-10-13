@@ -11,14 +11,23 @@ public enum ConfigSource
 
 public enum ConfigReadStatus { Read, AccessDenied, NotFound, NotScanned, Error }
 
+/// <summary>Why config files could not be read through the SCM site.</summary>
+public enum ConfigAccessReason { None, MissingRole, ScmAccessRestricted, ScmUnreachable, AuthRejected, Unknown }
+
+/// <summary>Which route served the config files.</summary>
+public enum ConfigFilesRoute { None, Direct, ArmTunnel }
+
 public enum ConnectionTargetKind
 {
     SqlServer, SqlDatabase, StorageAccount, BlobContainer, CosmosAccount,
-    RedisCache, ServiceBusNamespace, KeyVault, ContainerRegistry, External
+    RedisCache, ServiceBusNamespace, KeyVault, ContainerRegistry, External,
+    StorageQueue, ExternalService
 }
 
 public enum Confidence { Low, Medium, High }
 
+/// <param name="AccountOrServerName">For <see cref="ConnectionTargetKind.ExternalService"/>, the catalog service id.</param>
+/// <param name="ContainerName">Child entity name: blob container or storage queue.</param>
 public sealed record ConnectionReference(
     ConnectionTargetKind Kind,
     string? Host,
@@ -73,6 +82,10 @@ public sealed record AppConfigAnalysis(
     IReadOnlyList<ConfigEntry> Entries)
 {
     public IReadOnlyList<ImageReference> Images { get; init; } = [];
+    public ConfigAccessReason ConfigFilesReason { get; init; }
+    public ConfigFilesRoute ConfigFilesVia { get; init; }
+    public IReadOnlyList<string> ConfigFilesRead { get; init; } = [];
+    public IReadOnlyList<string> ConfigFilesSkipped { get; init; } = [];
 
     [JsonIgnore]
     public int ConnectionCount => Entries
@@ -107,6 +120,8 @@ public static class ConfigSourceNames
         ConnectionTargetKind.ServiceBusNamespace => "Service Bus",
         ConnectionTargetKind.KeyVault => "Key Vault",
         ConnectionTargetKind.ContainerRegistry => "Container Registry",
+        ConnectionTargetKind.StorageQueue => "Storage Queue",
+        ConnectionTargetKind.ExternalService => "External Service",
         _ => "External"
     };
 }

@@ -33,7 +33,7 @@ public sealed class SnapshotDiffService(InventoryGraphBuilder graphBuilder, IOpt
             .OrderBy(c => c.Id, StringComparer.Ordinal)
             .ToList();
 
-        var buildOptions = new GraphBuildOptions(inventoryOptions.Value.MaxBlobContainersPerAccount);
+        var buildOptions = GraphBuildOptions.From(inventoryOptions.Value);
         var oldEdges = Connections(graphBuilder.Build(previous with { Resources = before.Values.ToList() }, buildOptions), shared);
         var newEdges = Connections(currentGraph ?? graphBuilder.Build(current, buildOptions), shared);
         return new SnapshotDiff(previous.ScannedUtc, current.ScannedUtc, added, removed, changed,

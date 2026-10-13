@@ -32,12 +32,17 @@ public static class EdgeTypes
     public const string HasSlot = "HAS_SLOT";
     public const string HostsDatabase = "HOSTS_DATABASE";
     public const string HasContainer = "HAS_CONTAINER";
+    public const string HasQueue = "HAS_QUEUE";
     public const string ConnectsTo = "CONNECTS_TO";
     public const string ReferencesSecret = "REFERENCES_SECRET";
     public const string PullsImageFrom = "PULLS_IMAGE_FROM";
 
     public static readonly IReadOnlySet<string> Structural =
-        new HashSet<string> { Contains, HasSlot, HostsDatabase, HasContainer };
+        new HashSet<string> { Contains, HasSlot, HostsDatabase, HasContainer, HasQueue };
+
+    /// <summary>Edges from a parent resource to child entities (databases, containers, queues).</summary>
+    public static readonly IReadOnlySet<string> Children =
+        new HashSet<string> { HostsDatabase, HasContainer, HasQueue };
 }
 
 /// <summary>A non-secret setting reference attached to a CONNECTS_TO or REFERENCES_SECRET edge.</summary>
@@ -102,6 +107,9 @@ public static class TagKeys
 public sealed class GraphFilterState
 {
     public List<string> NodeTypes { get; set; } = new();
+
+    /// <summary>Node types that existed when the filter was saved; types added later are shown by default.</summary>
+    public List<string> KnownNodeTypes { get; set; } = new();
     public List<string> Subscriptions { get; set; } = new();
     public List<string> ResourceGroups { get; set; } = new();
     public bool OnlyConnected { get; set; }
@@ -134,10 +142,12 @@ public static class NodeTypeStyles
         ("SqlDatabase", "#66BB6A"),
         ("StorageAccount", "#7B1FA2"),
         ("BlobContainer", "#CE93D8"),
+        ("StorageQueue", "#AB47BC"),
         ("CosmosAccount", "#5C6BC0"),
         ("RedisCache", "#D32F2F"),
         ("ServiceBusNamespace", "#455A64"),
         ("KeyVault", "#C8A400"),
+        ("ExternalService", "#607D8B"),
         ("External", "#9E9E9E"),
         ("Tenant", "#BDBDBD"),
         ("Subscription", "#BDBDBD"),
@@ -147,6 +157,24 @@ public static class NodeTypeStyles
     public static readonly IReadOnlySet<string> HiddenByDefault =
         new HashSet<string> { "Tenant", "Subscription", "ResourceGroup" };
 
+    /// <summary>Types that existed before <see cref="GraphFilterState.KnownNodeTypes"/> was saved with filters.</summary>
+    public static readonly IReadOnlySet<string> LegacyTypes = new HashSet<string>
+    {
+        "WebApp", "FunctionApp", "WebAppSlot", "ContainerApp", "ContainerRegistry", "SqlServer", "SqlDatabase",
+        "StorageAccount", "BlobContainer", "CosmosAccount", "RedisCache", "ServiceBusNamespace", "KeyVault",
+        "External", "Tenant", "Subscription", "ResourceGroup"
+    };
+
     public static string ColorOf(string type) =>
         All.FirstOrDefault(t => t.Type == type).Color ?? "#9E9E9E";
+
+    /// <summary>Saved visible types, plus visible-by-default types that did not exist when the filter was saved.</summary>
+    public static List<string> RestoreVisibleTypes(GraphFilterState saved)
+    {
+        var known = All.Select(t => t.Type).ToList();
+        var result = (saved.NodeTypes ?? []).Where(known.Contains).Distinct().ToList();
+        var savedKnown = saved.KnownNodeTypes is { Count: > 0 } k ? k.ToHashSet(StringComparer.Ordinal) : LegacyTypes;
+        result.AddRange(known.Where(t => !savedKnown.Contains(t) && !HiddenByDefault.Contains(t) && !result.Contains(t)));
+        return result;
+    }
 }

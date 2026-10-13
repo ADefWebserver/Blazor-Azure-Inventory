@@ -21,6 +21,8 @@ public sealed class TagValidator(SecretClassifier secrets)
             Reason: "Blob containers do not support Azure tags (they use container metadata instead)."),
         ["blobcontainer"] = new(Taggable: false,
             Reason: "Blob containers do not support Azure tags (they use container metadata instead)."),
+        ["microsoft.storage/storageaccounts/queueservices/queues"] = new(Taggable: false,
+            Reason: "Storage queues do not support Azure tags (they use queue metadata instead)."),
     };
 
     public sealed record TypeRule(int MaxNameLength = TagValidator.MaxNameLength, bool Taggable = true, string? Reason = null);

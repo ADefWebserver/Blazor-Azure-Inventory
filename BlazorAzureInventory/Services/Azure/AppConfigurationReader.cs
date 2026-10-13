@@ -23,6 +23,7 @@ public sealed record AppReadResult(
 public sealed class AppConfigurationReader(
     ArmClientFactory armFactory,
     KuduConfigFileReader kudu,
+    ScmAccessDiagnostics diagnostics,
     ConfigFlattener flattener,
     ConfigAnalyzer analyzer,
     IOptions<InventoryOptions> options,
@@ -108,15 +109,17 @@ public sealed class AppConfigurationReader(
 
         var environment = EnvironmentKeys
             .Select(k => appSettings?.FirstOrDefault(kv => kv.Key.Equals(k, StringComparison.OrdinalIgnoreCase)).Value)
-            .FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? "Production";
+            .FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))?.Trim() ?? "Production";
 
-        var filesStatus = ConfigReadStatus.NotScanned;
-        var filesFound = new List<string>();
-        if (options.Value.ReadConfigFiles && app.Kind != AzureResourceKind.FunctionApp && scmHost is not null)
+        var files = ConfigFilesResult.NotScanned;
+        if (options.Value.ReadConfigFiles && app.Kind != AzureResourceKind.FunctionApp
+            && (scmHost is not null || options.Value.UseArmKuduFallback))
         {
-            onStage?.Invoke("Reading config files");
-            (filesStatus, var fileIssue) = await ReadConfigFilesAsync(app, scmHost, environment, raw, filesFound, ct);
-            if (fileIssue is not null) issues.Add(fileIssue);
+            onStage?.Invoke(ScanProgress.ReadingConfigFiles);
+            files = await ReadConfigFilesAsync(app, scmHost, environment, ct);
+            raw.AddRange(files.Settings);
+            if (files.Issue is not null) issues.Add(files.Issue);
+            if (files.Via != ConfigFilesRoute.None) extra["configFilesVia"] = files.Via.ToString();
         }
 
         var linuxImage = ConnectionClassifier.ParseImage(linuxFx);
@@ -128,7 +131,14 @@ public sealed class AppConfigurationReader(
         var entries = Analyze(app.Id, slotName, environment, raw);
         IReadOnlyList<ImageReference> images = linuxImage is null ? [] : [linuxImage];
         return new AppReadResult(
-            new AppConfigAnalysis(app.Id, environment, settingsStatus, filesStatus, filesFound, entries) { Images = images },
+            new AppConfigAnalysis(app.Id, environment, settingsStatus, files.Status, files.Found, entries)
+            {
+                Images = images,
+                ConfigFilesReason = files.Reason,
+                ConfigFilesVia = files.Via,
+                ConfigFilesRead = files.Read,
+                ConfigFilesSkipped = files.Skipped
+            },
             issues, extra);
     }
 
@@ -196,47 +206,103 @@ public sealed class AppConfigurationReader(
         }
     }
 
-    private async Task<(ConfigReadStatus Status, ScanIssue? Issue)> ReadConfigFilesAsync(
-        AzureResourceInfo app, string scmHost, string environment, List<RawSetting> raw, List<string> filesFound, CancellationToken ct)
+    private sealed record ConfigFilesResult(
+        ConfigReadStatus Status, ScanIssue? Issue, ConfigAccessReason Reason, ConfigFilesRoute Via,
+        IReadOnlyList<string> Found, IReadOnlyList<string> Read, IReadOnlyList<string> Skipped, IReadOnlyList<RawSetting> Settings)
+    {
+        public static readonly ConfigFilesResult NotScanned =
+            new(ConfigReadStatus.NotScanned, null, ConfigAccessReason.None, ConfigFilesRoute.None, [], [], [], []);
+
+        public KuduException? Failure { get; init; }
+    }
+
+    private static readonly ConfigAccessReason[] FallbackReasons =
+        [ConfigAccessReason.ScmAccessRestricted, ConfigAccessReason.ScmUnreachable, ConfigAccessReason.AuthRejected, ConfigAccessReason.Unknown];
+
+    private async Task<ConfigFilesResult> ReadConfigFilesAsync(AzureResourceInfo app, string? scmHost, string environment, CancellationToken ct)
     {
         var credential = await armFactory.GetCredentialAsync(app.TenantId);
+        var fallback = options.Value.UseArmKuduFallback;
+        if (scmHost is null)
+        {
+            return await ReadViaAsync(app, KuduTarget.ArmTunnel(app.Id), credential, environment, ConfigAccessReason.None, ct);
+        }
+
+        var direct = await ReadViaAsync(app, KuduTarget.Direct(scmHost), credential, environment, ConfigAccessReason.None, ct);
+        if (direct.Failure is not { } failure || failure.Status != ConfigReadStatus.AccessDenied) return direct;
+
+        var reason = await diagnostics.DiagnoseAsync(app, failure, ct);
+        if (reason == ConfigAccessReason.None) reason = ConfigAccessReason.Unknown;
+        if (fallback && FallbackReasons.Contains(reason))
+        {
+            var tunneled = await ReadViaAsync(app, KuduTarget.ArmTunnel(app.Id), credential, environment, reason, ct);
+            if (tunneled.Status is ConfigReadStatus.Read or ConfigReadStatus.NotFound) return tunneled;
+            logger.LogDebug("ARM tunnel config read failed for {ResourceId}: {Message}", app.Id, tunneled.Issue?.Message);
+        }
+
+        return direct with
+        {
+            Reason = reason,
+            Issue = new ScanIssue(app.Id, ScanProgress.ReadingConfigFiles, failure.IssueKind, AccessMessage(reason, failure, fallback))
+        };
+    }
+
+    /// <summary>Only <see cref="ConfigAccessReason.MissingRole"/> (and Unknown) name the permission, so network problems are not reported as missing roles.</summary>
+    public static string AccessMessage(ConfigAccessReason reason, KuduException failure, bool fallbackEnabled)
+    {
+        var fallbackHint = fallbackEnabled ? " The ARM fallback also failed." : " Or enable Inventory:UseArmKuduFallback.";
+        return reason switch
+        {
+            ConfigAccessReason.ScmAccessRestricted =>
+                "SCM site blocks this scanner by access restrictions. Allow the scanner's outbound IP or VNet on the SCM site." + fallbackHint,
+            ConfigAccessReason.ScmUnreachable =>
+                "SCM site unreachable from the scanner (private endpoint or DNS). Link the scanner VNet to the privatelink.azurewebsites.net DNS zone." + fallbackHint,
+            ConfigAccessReason.AuthRejected =>
+                $"{failure.HttpStatus}: SCM rejected the token although the role is present (for example Conditional Access)." + fallbackHint,
+            _ => failure.Message
+        };
+    }
+
+    private async Task<ConfigFilesResult> ReadViaAsync(
+        AzureResourceInfo app, KuduTarget target, TokenCredential credential, string environment, ConfigAccessReason reason, CancellationToken ct)
+    {
+        var found = new List<string>();
+        var settings = new List<RawSetting>();
         string? current = null;
         try
         {
-            filesFound.AddRange(await kudu.ListConfigFilesAsync(scmHost, credential, ct));
-            var envFile = $"appsettings.{environment}.json";
-            var toRead = filesFound
-                .Where(f => f.Equals("appsettings.json", StringComparison.OrdinalIgnoreCase)
-                            || f.Equals(envFile, StringComparison.OrdinalIgnoreCase))
-                .OrderBy(f => f.Length)
-                .ToList();
-            if (toRead.Count == 0) return (ConfigReadStatus.NotFound, null);
+            found.AddRange(await kudu.ListConfigFilesAsync(target, credential, ct));
+            var selection = ConfigFileResolver.Resolve(found, environment, options.Value.EffectiveEnvironmentAliases);
+            if (selection.ToRead.Count == 0)
+            {
+                return new(ConfigReadStatus.NotFound, null, reason, target.Route, found, [], selection.Skipped, []);
+            }
 
-            foreach (var file in toRead)
+            foreach (var file in selection.ToRead)
             {
                 current = file;
-                var source = file.Equals("appsettings.json", StringComparison.OrdinalIgnoreCase)
-                    ? ConfigSource.AppSettingsJson
-                    : ConfigSource.AppSettingsEnvironmentJson;
-                await using var stream = await kudu.ReadFileAsync(scmHost, file, credential, ct);
-                raw.AddRange(flattener.FlattenJson(stream, file, source));
+                var source = file == selection.BaseFile ? ConfigSource.AppSettingsJson : ConfigSource.AppSettingsEnvironmentJson;
+                await using var stream = await kudu.ReadFileAsync(target, file, credential, ct);
+                settings.AddRange(flattener.FlattenJson(stream, file, source));
             }
-            return (ConfigReadStatus.Read, null);
+            return new(ConfigReadStatus.Read, null, reason, target.Route, found, selection.ToRead, selection.Skipped, settings);
         }
         catch (KuduException ex) when (ex.Status == ConfigReadStatus.NotFound)
         {
-            return (ConfigReadStatus.NotFound, null);
+            return new(ConfigReadStatus.NotFound, null, reason, target.Route, found, [], [], []);
         }
         catch (Exception ex) when (ex is FormatException or System.Text.Json.JsonException or InvalidDataException)
         {
             // Parser messages can echo content, so only the file name is reported.
-            return (ConfigReadStatus.Error, new ScanIssue(app.Id, "Reading config files", ScanIssueKind.Unexpected, $"Malformed JSON in {current}."));
+            return new(ConfigReadStatus.Error, new ScanIssue(app.Id, ScanProgress.ReadingConfigFiles, ScanIssueKind.Unexpected, $"Malformed JSON in {current}."),
+                reason, ConfigFilesRoute.None, found, [], [], []);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             var (kind, message) = ScanErrors.Classify(ex, AzureRoleRequirements.ConfigFiles.Hint);
             var status = ex is KuduException k ? k.Status : kind == ScanIssueKind.AccessDenied ? ConfigReadStatus.AccessDenied : ConfigReadStatus.Error;
-            return (status, new ScanIssue(app.Id, "Reading config files", kind, message));
+            return new(status, new ScanIssue(app.Id, ScanProgress.ReadingConfigFiles, kind, message),
+                reason, ConfigFilesRoute.None, found, [], [], []) { Failure = ex as KuduException };
         }
     }
 

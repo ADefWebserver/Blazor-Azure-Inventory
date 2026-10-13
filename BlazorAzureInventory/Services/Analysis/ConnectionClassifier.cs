@@ -1,6 +1,7 @@
 using System.Data.Common;
 using System.Text.RegularExpressions;
 using BlazorAzureInventory.Models.Configuration;
+using BlazorAzureInventory.Models.Options;
 
 namespace BlazorAzureInventory.Services.Analysis;
 
@@ -8,12 +9,21 @@ namespace BlazorAzureInventory.Services.Analysis;
 /// Extracts identifiers (hosts, account, database, container, vault and secret names) from a transient
 /// setting value. The raw value is never returned or stored.
 /// </summary>
-public sealed partial class ConnectionClassifier(CloudEndpointSuffixes suffixes)
+public sealed partial class ConnectionClassifier(
+    CloudEndpointSuffixes suffixes, ExternalServiceCatalog? catalog = null, StorageNameHintOptions? hints = null)
 {
+    private readonly ExternalServiceCatalog _catalog = catalog ?? ExternalServiceCatalog.Default;
+    private readonly IReadOnlyList<string> _containerKeywords = (hints ?? new()).EffectiveContainerKeywords;
+    private readonly IReadOnlyList<string> _queueKeywords = (hints ?? new()).EffectiveQueueKeywords;
+
     private static readonly string[] SqlServerKeys = ["Server", "Data Source", "Address", "Addr", "Network Address"];
     private static readonly string[] SqlDatabaseKeys = ["Initial Catalog", "Database"];
     private static readonly string[] StorageEndpointKeys = ["BlobEndpoint", "QueueEndpoint", "TableEndpoint", "FileEndpoint"];
     private static readonly string[] IdentityStorageUriSuffixes = ["blobServiceUri", "queueServiceUri", "tableServiceUri", "serviceUri"];
+    private static readonly string[] ServiceHostKeys = ["Host", "Server", "SmtpServer", "Smtp", "Endpoint"];
+
+    [GeneratedRegex(@"^(?<host>[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+)(:\d{1,5})?$")]
+    private static partial Regex BareHostRegex();
 
     [GeneratedRegex(@"^@Microsoft\.KeyVault\((?<body>.*)\)$", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
     private static partial Regex KeyVaultReferenceRegex();
@@ -28,7 +38,7 @@ public sealed partial class ConnectionClassifier(CloudEndpointSuffixes suffixes)
     private static partial Regex StorageHostRegex();
 
     [GeneratedRegex(@"^[a-z0-9](?!.*--)[a-z0-9-]{1,61}[a-z0-9]$")]
-    private static partial Regex BlobContainerNameRegex();
+    private static partial Regex ChildNameRegex();
 
     [GeneratedRegex(@"^[a-z0-9]{3,24}$")]
     private static partial Regex StorageAccountNameRegex();
@@ -43,6 +53,8 @@ public sealed partial class ConnectionClassifier(CloudEndpointSuffixes suffixes)
 
         var value = transientValue.Trim();
 
+        // A known SaaS host is never an Azure resource, and "Server=smtp..." must not be read as SQL.
+        if (TryExternalServiceHost(value, out var service)) return [service];
         if (TryKeyVaultReference(value, out var kvRef)) return [kvRef];
         if (TryRedis(value, out var redis)) return [redis];
 
@@ -65,9 +77,17 @@ public sealed partial class ConnectionClassifier(CloudEndpointSuffixes suffixes)
 
         if (TryIdentityBased(key, value, out var identity)) results.Add(identity);
 
-        if (results.Count == 0 && TryContainerHint(key, value, out var hint)) results.Add(hint);
+        if (results.Count == 0 && TryExternalServiceKey(key, out var keyed)) results.Add(keyed);
+        if (results.Count == 0 && TryStorageNameHint(key, value, out var hint)) results.Add(hint);
 
         return Dedupe(results);
+    }
+
+    /// <summary>The part of a flattened key after the last section separator.</summary>
+    public static string LastSegment(string key)
+    {
+        var i = key.LastIndexOf(':');
+        return i >= 0 ? key[(i + 1)..] : key;
     }
 
     public static bool IsIdentityBasedKey(string key) =>
@@ -150,6 +170,13 @@ public sealed partial class ConnectionClassifier(CloudEndpointSuffixes suffixes)
 
     private IEnumerable<ConnectionReference> ClassifyConnectionString(DbConnectionStringBuilder b)
     {
+        // EF6 entity connection strings wrap the real one in "provider connection string".
+        if (FirstValue(b, ["provider connection string"]) is { } inner && TryParseConnectionString(inner, out var innerBuilder))
+        {
+            foreach (var r in ClassifyConnectionString(innerBuilder)) yield return r;
+            yield break;
+        }
+
         // SQL
         var server = FirstValue(b, SqlServerKeys);
         if (!string.IsNullOrWhiteSpace(server))
@@ -229,11 +256,16 @@ public sealed partial class ConnectionClassifier(CloudEndpointSuffixes suffixes)
 
         var account = m.Groups["acct"].Value.ToLowerInvariant();
         var service = m.Groups["svc"].Value.ToLowerInvariant();
+        var first = uri.AbsolutePath.Trim('/').Split('/')[0];
         string? container = null;
         if (service is "blob" or "dfs")
         {
-            var first = uri.AbsolutePath.Trim('/').Split('/')[0];
-            if (BlobContainerNameRegex().IsMatch(first) || first is "$web" or "$root") container = first;
+            if (ChildNameRegex().IsMatch(first) || first is "$web" or "$root") container = first;
+        }
+        else if (service == "queue" && ChildNameRegex().IsMatch(first))
+        {
+            reference = new ConnectionReference(ConnectionTargetKind.StorageQueue, host, account, null, first, null, false, Confidence.High, null);
+            return true;
         }
 
         reference = new ConnectionReference(
@@ -280,15 +312,66 @@ public sealed partial class ConnectionClassifier(CloudEndpointSuffixes suffixes)
         return false;
     }
 
-    private static bool TryContainerHint(string key, string value, out ConnectionReference reference)
+    private bool TryExternalServiceHost(string value, out ConnectionReference reference)
     {
         reference = null!;
-        if (!key.Contains("Container", StringComparison.OrdinalIgnoreCase) || !BlobContainerNameRegex().IsMatch(value))
+        foreach (var host in CandidateHosts(value))
         {
-            return false;
+            if (_catalog.MatchHost(host) is { } def)
+            {
+                reference = new ConnectionReference(ConnectionTargetKind.ExternalService, host, def.Id, null, null, null,
+                    false, Confidence.High, null);
+                return true;
+            }
         }
-        reference = new ConnectionReference(ConnectionTargetKind.BlobContainer, null, null, null, value, null,
-            false, Confidence.Low, null);
+        return false;
+    }
+
+    // Only the key is used; values of keys such as "SendGridApiKey" are secrets and are never inspected.
+    private bool TryExternalServiceKey(string key, out ConnectionReference reference)
+    {
+        reference = null!;
+        if (_catalog.MatchKey(LastSegment(key)) is not { } def) return false;
+        reference = new ConnectionReference(ConnectionTargetKind.ExternalService, null, def.Id, null, null, null,
+            false, Confidence.Medium, null);
+        return true;
+    }
+
+    private static IEnumerable<string> CandidateHosts(string value)
+    {
+        if (BareHostRegex().Match(value) is { Success: true } bare) yield return bare.Groups["host"].Value.ToLowerInvariant();
+
+        foreach (Match match in UriRegex().Matches(value))
+        {
+            if (Uri.TryCreate(match.Value, UriKind.Absolute, out var uri)) yield return uri.Host.ToLowerInvariant();
+        }
+
+        if (!IsAbsoluteUri(value) && TryParseConnectionString(value, out var b))
+        {
+            foreach (var k in ServiceHostKeys)
+            {
+                if (FirstValue(b, [k]) is not { } v) continue;
+                if (Uri.TryCreate(v, UriKind.Absolute, out var u) && u.Host.Length > 0) yield return u.Host.ToLowerInvariant();
+                else if (BareHostRegex().Match(v.Trim()) is { Success: true } m) yield return m.Groups["host"].Value.ToLowerInvariant();
+            }
+        }
+    }
+
+    /// <summary>Low-confidence child-name hint from a key whose last segment names a container or queue.</summary>
+    private bool TryStorageNameHint(string key, string value, out ConnectionReference reference)
+    {
+        reference = null!;
+        var segment = LastSegment(key);
+        ConnectionTargetKind? kind =
+            _queueKeywords.Any(k => segment.Contains(k, StringComparison.OrdinalIgnoreCase)) ? ConnectionTargetKind.StorageQueue
+            : _containerKeywords.Any(k => segment.Contains(k, StringComparison.OrdinalIgnoreCase)) ? ConnectionTargetKind.BlobContainer
+            : null;
+        if (kind is null) return false;
+
+        // Container and queue names are always lowercase; mixed-case values such as "Outreach" are blob folders, not containers.
+        if (!ChildNameRegex().IsMatch(value) || !value.Any(char.IsAsciiLetterLower)) return false;
+
+        reference = new ConnectionReference(kind.Value, null, null, null, value, null, false, Confidence.Low, null);
         return true;
     }
 

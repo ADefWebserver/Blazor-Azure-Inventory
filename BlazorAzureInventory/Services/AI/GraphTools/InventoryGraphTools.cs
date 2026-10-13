@@ -9,10 +9,10 @@ public sealed class InventoryGraphTools(InventorySnapshot snapshot, GraphIndex i
 {
     private static readonly HashSet<string> AppTypes = ["WebApp", "FunctionApp", "WebAppSlot", "ContainerApp"];
     private static readonly HashSet<string> DataTypes =
-        ["SqlServer", "SqlDatabase", "StorageAccount", "BlobContainer", "CosmosAccount", "RedisCache", "ServiceBusNamespace", "KeyVault", "ContainerRegistry"];
+        ["SqlServer", "SqlDatabase", "StorageAccount", "BlobContainer", "StorageQueue", "CosmosAccount", "RedisCache", "ServiceBusNamespace", "KeyVault", "ContainerRegistry"];
     private static readonly HashSet<string> DependencyEdges =
         [EdgeTypes.ConnectsTo, EdgeTypes.ReferencesSecret, EdgeTypes.PullsImageFrom];
-    private static readonly HashSet<string> ChildEdges = [EdgeTypes.HostsDatabase, EdgeTypes.HasContainer];
+    private static readonly IReadOnlySet<string> ChildEdges = EdgeTypes.Children;
 
     public GraphStats Stats() => new(
         index.Graph.Nodes.Count,
@@ -38,7 +38,7 @@ public sealed class InventoryGraphTools(InventorySnapshot snapshot, GraphIndex i
         if (node is null) return null;
         // Tags are excluded here; GetTags returns them with secret-like values masked.
         var props = node.Data.Where(kv => kv.Key != "references" && kv.Key != TagKeys.Tags)
-            .ToDictionary(kv => kv.Key, kv => kv.Value?.ToString());
+            .ToDictionary(kv => kv.Key, kv => kv.Value is List<string> list ? string.Join(", ", list) : kv.Value?.ToString());
         return new NodeDetail(node.Id, node.Type, node.Label, props, index.In(node.Id).Count, index.Out(node.Id).Count);
     }
 

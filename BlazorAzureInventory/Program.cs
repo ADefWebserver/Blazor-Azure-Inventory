@@ -78,6 +78,7 @@ public class Program
         AddHttpRateLimiting(builder.Services, builder.Configuration);
 
         builder.Services.AddOptions<InventoryOptions>().BindConfiguration("Inventory").ValidateDataAnnotations().ValidateOnStart();
+        builder.Services.AddSingleton<IValidateOptions<InventoryOptions>, ExternalServiceOptionsValidator>();
         builder.Services.AddOptions<AzureMcpOptions>().BindConfiguration("AzureMcp").ValidateDataAnnotations().ValidateOnStart();
         builder.Services.AddOptions<GraphSessionOptions>().BindConfiguration("GraphSession").ValidateDataAnnotations();
         builder.Services.AddOptions<SecurityOptions>().BindConfiguration("Security");
@@ -98,10 +99,15 @@ public class Program
         builder.Services.AddScoped<InventoryScanOrchestrator>();
         builder.Services.AddHttpClient<KuduConfigFileReader>()
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
+        builder.Services.AddScoped<ScmAccessDiagnostics>();
+        builder.Services.AddHttpClient(ScmAccessDiagnostics.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
 
         // Stateless analysis
         builder.Services.AddSingleton<ScmHostValidator>();
         builder.Services.AddSingleton<CloudEndpointSuffixes>();
+        builder.Services.AddSingleton(sp => new ExternalServiceCatalog(sp.GetRequiredService<IOptions<InventoryOptions>>()));
+        builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<InventoryOptions>>().Value.StorageNameHints);
         builder.Services.AddSingleton<ConfigFlattener>();
         builder.Services.AddSingleton<SecretClassifier>();
         builder.Services.AddSingleton<ConnectionClassifier>();

@@ -21,29 +21,54 @@ public sealed class ConfigAnalyzer(ConfigFlattener flattener, SecretClassifier s
                 classifier.Classify(setting.Key, setting.Value, setting.Source)));
         }
 
-        // Container-name hints are only kept when the same app has a resolved-quality storage reference.
-        var storageAccount = entries
+        // Container and queue name hints are only kept when the same app has a resolved-quality storage reference.
+        var candidates = entries
             .Where(e => !e.IsOverridden)
-            .SelectMany(e => e.References)
-            .Where(r => r.Kind is ConnectionTargetKind.StorageAccount or ConnectionTargetKind.BlobContainer
-                        && r.Confidence != Confidence.Low && r.AccountOrServerName is not null)
-            .Select(r => r.AccountOrServerName)
-            .FirstOrDefault();
+            .SelectMany(e => e.References.Select(r => (e.Key, Ref: r)))
+            .Where(x => x.Ref.Kind is ConnectionTargetKind.StorageAccount or ConnectionTargetKind.BlobContainer or ConnectionTargetKind.StorageQueue
+                        && x.Ref.Confidence != Confidence.Low && x.Ref.AccountOrServerName is not null)
+            .Select(x => (x.Key, Account: x.Ref.AccountOrServerName!))
+            .ToList();
 
         for (var i = 0; i < entries.Count; i++)
         {
             var e = entries[i];
             if (!e.References.Any(IsHint)) continue;
+            var account = BestAccount(e.Key, candidates);
             entries[i] = e with
             {
-                References = storageAccount is null
+                References = account is null
                     ? e.References.Where(r => !IsHint(r)).ToList()
-                    : e.References.Select(r => IsHint(r) ? r with { AccountOrServerName = storageAccount } : r).ToList()
+                    : e.References.Select(r => IsHint(r) ? r with { AccountOrServerName = account } : r).ToList()
             };
         }
         return entries;
 
         static bool IsHint(ConnectionReference r) =>
-            r.Kind == ConnectionTargetKind.BlobContainer && r.Confidence == Confidence.Low && r.AccountOrServerName is null;
+            r.Kind is ConnectionTargetKind.BlobContainer or ConnectionTargetKind.StorageQueue
+            && r.Confidence == Confidence.Low && r.AccountOrServerName is null;
+    }
+
+    /// <summary>The storage account whose setting key shares the most leading sections with <paramref name="hintKey"/>; ties keep the first.</summary>
+    public static string? BestAccount(string hintKey, IReadOnlyList<(string Key, string Account)> candidates)
+    {
+        string? best = null;
+        var bestScore = -1;
+        var hintSections = Sections(hintKey);
+        foreach (var (key, account) in candidates)
+        {
+            var sections = Sections(key);
+            var score = 0;
+            while (score < hintSections.Length && score < sections.Length
+                   && hintSections[score].Equals(sections[score], StringComparison.OrdinalIgnoreCase)) score++;
+            if (score > bestScore)
+            {
+                best = account;
+                bestScore = score;
+            }
+        }
+        return best;
+
+        static string[] Sections(string key) => key.Split(':')[..^1];
     }
 }

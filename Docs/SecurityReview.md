@@ -1094,6 +1094,8 @@ if (builder.ExecutionContext.IsRunMode)
 
 **Reviewed:** the app has no upload or download endpoints. The only file reads are Kudu VFS reads, which are size-capped (`MaxConfigFileBytes`, checked both on `Content-Length` and while streaming), limited to file names that match the configured patterns, URL-encoded, time-limited (15 s), and never written to disk. The only file write is `SecuritySettingsStore`, which uses a fixed path and is covered by SEC-001.
 
+**Addendum (ARM tunnel and SCM diagnostics):** when the direct SCM call fails for a reason other than a missing role, the same VFS paths are read through `https://management.azure.com{siteId}/extensions/api/vfs/site/wwwroot/` (`Inventory:UseArmKuduFallback`). The host is fixed, the site ID comes from Resource Graph and must match a strict `Microsoft.Web/sites[/slots]` regex, and the same pattern allow list, size cap, timeout, and no-redirect rules apply. `ScmAccessDiagnostics` reads only ARM metadata (`Microsoft.Authorization/permissions` and `config/web`); Kudu response bodies are never read, logged, or stored. External-service detection uses host names and setting-key names only, and catalog colors are validated as hex on the server and in `graph-view.js`.
+
 **Result:** no finding.
 
 ---
