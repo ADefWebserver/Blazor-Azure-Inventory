@@ -114,22 +114,22 @@ export async function render(streamRef) {
         return;
     }
 
-    const layout = parsed.mode === 'Focus'
-        ? cy.layout({
-            name: 'concentric',
-            concentric: node => node.data('index') === parsed.focus ? 2 : 1,
-            levelWidth: () => 1,
-            sort: (a, b) => String(a.data('category') ?? '').localeCompare(String(b.data('category') ?? '')),
-            spacingFactor: 1.2,
-            animate: false,
-            fit: false
-        })
-        : cy.layout({ name: 'preset', fit: false });
-
-    await new Promise(resolve => {
-        layout.one('layoutstop', resolve);
-        layout.run();
-    });
+    if (parsed.mode === 'Focus') {
+        const positions = focusPositions(parsed);
+        cy.batch(() => {
+            cy.nodes().forEach(node => {
+                const position = positions[node.data('index')];
+                if (position && !node.isParent()) node.position(position);
+            });
+        });
+    }
+    else {
+        const layout = cy.layout({ name: 'preset', fit: false });
+        await new Promise(resolve => {
+            layout.one('layoutstop', resolve);
+            layout.run();
+        });
+    }
     const layoutEnd = performance.now();
     cy.fit(cy.elements(':visible'), 40);
     if (logTimings) {
@@ -326,19 +326,23 @@ function buildStyle() {
             }
         },
         {
-            selector: 'node[?parent]',
+            selector: 'node:parent',
             style: {
                 shape: 'round-rectangle',
                 padding: 24,
                 'background-color': '#e2e8f0',
                 'background-opacity': 0.4,
+                'background-image': 'none',
                 'border-color': '#94a3b8',
                 'border-width': 1,
                 'text-valign': 'top',
-                'text-halign': 'left',
-                'text-margin-x': 8,
-                'text-margin-y': 8
+                'text-halign': 'center',
+                'text-margin-y': -6
             }
+        },
+        {
+            selector: 'node:child',
+            style: { 'text-max-width': 120 }
         },
         {
             selector: 'node[?aggregate]',
@@ -378,6 +382,89 @@ function buildStyle() {
     ];
 }
 
+// Focus layout: the focused node in the centre and every other top-level unit (a node, or a parent with its children
+// packed into a grid) on concentric rings sized so units and their labels never overlap. Children are positioned
+// relative to their parent; the parent's box then follows its children.
+function focusPositions(view) {
+    const FOCUS_SIZE = 72;
+    const NODE_SIZE = 40;
+    const CELL_W = 130;
+    const CELL_H = 70;
+    const PARENT_PADDING = 24;
+    const GAP = 40;
+    const positions = new Array(view.nodes.length);
+    const childrenOf = new Map();
+    view.nodes.forEach((node, index) => {
+        if (Number.isInteger(node.p) && node.p !== index) {
+            if (!childrenOf.has(node.p)) childrenOf.set(node.p, []);
+            childrenOf.get(node.p).push(index);
+        }
+    });
+    const isChild = index => Number.isInteger(view.nodes[index].p) && view.nodes[index].p !== index;
+
+    const units = [];
+    for (let index = 0; index < view.nodes.length; index++) {
+        if (index === view.focus || isChild(index)) continue;
+        const children = childrenOf.get(index) ?? [];
+        let width = Math.max(NODE_SIZE, 110);
+        let height = NODE_SIZE + 30;
+        let columns = 0;
+        if (children.length) {
+            columns = Math.ceil(Math.sqrt(children.length));
+            width = columns * CELL_W + 2 * PARENT_PADDING;
+            height = Math.ceil(children.length / columns) * CELL_H + 2 * PARENT_PADDING + 20;
+        }
+        units.push({ index, children, columns, diameter: Math.hypot(width, height) * 0.8 + GAP });
+    }
+
+    positions[view.focus] = { x: 0, y: 0 };
+    let centreRadius = FOCUS_SIZE / 2;
+    const focusChildren = childrenOf.get(view.focus) ?? [];
+    if (focusChildren.length) {
+        const columns = Math.ceil(Math.sqrt(focusChildren.length));
+        const rows = Math.ceil(focusChildren.length / columns);
+        focusChildren.forEach((child, i) => {
+            positions[child] = {
+                x: ((i % columns) - (columns - 1) / 2) * CELL_W,
+                y: (Math.floor(i / columns) - (rows - 1) / 2) * CELL_H + 10
+            };
+        });
+        centreRadius = Math.hypot(columns * CELL_W, rows * CELL_H) / 2 + PARENT_PADDING;
+    }
+    let radius = centreRadius + (units[0]?.diameter ?? 0) / 2 + 60;
+    let ring = 0;
+    for (let next = 0; next < units.length; ring++) {
+        const members = [];
+        let used = 0;
+        let thickness = 0;
+        while (next < units.length && (members.length === 0 || used + units[next].diameter <= 2 * Math.PI * radius)) {
+            members.push(units[next]);
+            used += units[next].diameter;
+            thickness = Math.max(thickness, units[next].diameter);
+            next++;
+        }
+        radius = Math.max(radius, used / (2 * Math.PI));
+        let angle = -Math.PI / 2 + ring * 0.6;
+        for (const unit of members) {
+            const share = (unit.diameter / used) * 2 * Math.PI;
+            const theta = angle + share / 2;
+            const x = radius * Math.cos(theta);
+            const y = radius * Math.sin(theta);
+            angle += share;
+            positions[unit.index] = { x, y };
+            unit.children.forEach((child, i) => {
+                const rows = Math.ceil(unit.children.length / unit.columns);
+                positions[child] = {
+                    x: x + ((i % unit.columns) - (unit.columns - 1) / 2) * CELL_W,
+                    y: y + (Math.floor(i / unit.columns) - (rows - 1) / 2) * CELL_H + 10
+                };
+            });
+        }
+        radius += thickness;
+    }
+    return positions;
+}
+
 function toElements(view) {
     const nodes = view.nodes.map((node, index) => {
         const color = validColor(node.c) ? node.c : (TYPE_COLORS[node.t] ?? TYPE_COLORS.External);
@@ -409,20 +496,24 @@ function toElements(view) {
             }
         };
     });
-    const edges = view.edges.map((edge, index) => ({
-        group: 'edges',
-        data: {
-            id: `edge-${index}`,
-            index,
-            source: nodeId(edge.s),
-            target: nodeId(edge.t),
-            edgeColor: EDGE_COLORS[edge.y] ?? '#94a3b8',
-            width: view.mode === 'Focus'
-                ? 2
-                : Math.max(1, Math.min(4, 1 + Math.log2(Math.max(1, edge.n ?? 1)))),
-            opacity: edge.lo ? 0.35 : 0.85
-        }
-    }));
+    const edges = view.edges.flatMap((edge, index) => {
+        // A parent box already shows containment; Cytoscape draws edges between a compound parent and its own child as loops.
+        if (view.nodes[edge.s]?.p === edge.t || view.nodes[edge.t]?.p === edge.s) return [];
+        return [{
+            group: 'edges',
+            data: {
+                id: `edge-${index}`,
+                index,
+                source: nodeId(edge.s),
+                target: nodeId(edge.t),
+                edgeColor: EDGE_COLORS[edge.y] ?? '#94a3b8',
+                width: view.mode === 'Focus'
+                    ? 2
+                    : Math.max(1, Math.min(4, 1 + Math.log2(Math.max(1, edge.n ?? 1)))),
+                opacity: edge.lo ? 0.35 : 0.85
+            }
+        }];
+    });
     return [...nodes, ...edges];
 }
 
