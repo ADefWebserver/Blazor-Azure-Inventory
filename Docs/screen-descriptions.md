@@ -5,7 +5,7 @@ This document describes every screen in **BlazorAzureInventory** so that UI mock
 ## UI Technology
 
 - **All UI is built with Radzen Blazor components** (`Radzen.Blazor`). Mockups should match the look of the standard Radzen theme (Material-style, for example the `material` or `standard` Radzen theme) and use Radzen components wherever a control is shown.
-- The one exception is the **graph canvas** on the Graph screen. Radzen has no network-graph component, so the canvas is drawn with **vis-network** (a force-directed node-and-edge diagram). Everything around the canvas (toolbar, filters, side panels) is Radzen.
+- The one exception is the **graph canvas** on the Graph screen. Radzen has no network-graph component, so the canvas is drawn with **Cytoscape.js** (a node-and-edge diagram with positions computed on the server). Node glyphs are Fluent UI System Icons (MIT). Everything around the canvas (toolbar, filters, side panels) is Radzen.
 - Icons are Material Icons (the Radzen default), for example `login`, `logout`, `account_circle`, `refresh`, `search`.
 - The app is a desktop-first web app. Mockups should target roughly 1440 x 900, with a note on how panels collapse on narrower screens.
 
@@ -276,55 +276,66 @@ Example rows:
 
 ## 7. Knowledge Graph
 
-**Purpose:** an interactive diagram of resources and their connections.
+**Purpose:** an interactive diagram of resources and their connections. It has two modes. **Overview** shows the whole estate in a simplified form (child resources are folded into their parent). **Focus** shows one resource, its direct neighbours, and optional expansions. See [Knowledge-Graph-Performance-UX-Plan.md](Knowledge-Graph-Performance-UX-Plan.md) for the design.
 
 ### 7.1 Layout
 
-A `RadzenSplitter` with three resizable, collapsible panes.
+A header row, then a `RadzenSplitter` with three resizable, collapsible panes.
+
+#### Header
+
+- Title **Knowledge Graph**, the scan-age badge, and the scope description (for example "1 tenant, 1 subscription").
+- **Show changes (n)** appears when the scan differs from the previous one. **Copy link** appears in Focus mode. The `more_vert` overflow menu holds **Rebuild graph** and **Export JSON**.
+- A breadcrumb in Focus mode: **Overview › contoso-web › contoso-sql**. Each segment is a button. The last one is the current page.
 
 #### Left Pane: Filters (about 280 px)
 
-- Section **Node types:** `RadzenCheckBoxList` with WebApp, FunctionApp, WebAppSlot, ContainerApp, ContainerRegistry, SqlServer, SqlDatabase, StorageAccount, BlobContainer, CosmosAccount, RedisCache, ServiceBusNamespace, KeyVault, External, Tenant, Subscription, ResourceGroup. All are checked except Tenant, Subscription, and ResourceGroup. Each item shows a small color swatch matching the node color.
-- Section **Scope:** multi-select `RadzenDropDown` for Subscriptions and another for Resource groups.
-- Section **Display:** `RadzenSwitch` toggles for *Only connected nodes*, *Hide external*, *Hide emulator*, *Show low-confidence edges*.
-- Section **Search:** `RadzenAutoComplete` "Find a node..." that centers and selects the chosen node.
+- **Search:** `RadzenAutoComplete` "Find a node...". Picking a resource opens Focus mode for it.
+- **Active filters:** removable chips for every non-default filter (for example "Only connected x") and **Reset all**. Shown only when a filter is active.
+- **Scope:** multi-select `RadzenDropDown` for Subscriptions and another for Resource groups, with **Reset**.
+- **Resource types:** grouped by category (Apps, Data, Storage, Messaging, Secrets, Registry, External, Scope). Each group has a tri-state checkbox and expands to the individual types, each with a colour swatch. **Select all** resets the selection.
+- **Tags** (collapsible `RadzenPanel`): tag name and value inputs with a 300 ms debounce and **Clear**.
+- **Advanced** (collapsible `RadzenPanel`): `RadzenSwitch` toggles for *Only connected nodes* (on by default), *Hide external*, *Hide emulator*, *Show low-confidence edges*, and *Show child resources*.
 
 #### Center Pane: Graph Canvas
 
-- Toolbar above the canvas (`RadzenStack` of small `RadzenButton`s): **Fit** (`fit_screen`), **Freeze physics** / **Resume physics** toggle (`pause` / `play_arrow`), **Rebuild graph** (`refresh`).
-- Right side of the toolbar: caption "142 nodes, 210 edges".
-- The **vis-network canvas** fills the rest of the pane. It is a force-directed diagram with these styles:
+- Toolbar above the canvas: **Fit** (`fit_screen`). On the right, the caption "Showing 142 of 1,034 nodes" (`aria-live="polite"`).
+- The **Cytoscape.js canvas** fills the rest of the pane. Positions are computed on the server and cached per session, so the diagram appears already laid out and there is no physics button.
+- Every node is a circle filled with the type colour and a white Fluent UI System Icon in the middle (the `External` node uses a dark glyph on grey). Node size grows with the number of connections. The label sits under the node and is drawn only when it is readable. Collapsed children are shown as a label suffix, for example `contoso-sql (+3 db)`.
 
-| Node Type | Shape | Color |
+| Node type | Fluent icon | Colour |
 |---|---|---|
-| WebApp | box | `#0078D4` |
-| FunctionApp | box | `#F2A900` |
-| WebAppSlot | smaller box | `#69AFE5` |
-| ContainerApp | hexagon | `#008575` |
-| ContainerRegistry | diamond | `#004E46` |
-| SqlServer | database cylinder | `#2E7D32` |
-| SqlDatabase | smaller cylinder | `#66BB6A` |
-| StorageAccount | ellipse | `#7B1FA2` |
-| BlobContainer | dot | `#CE93D8` |
-| StorageQueue | small square | `#AB47BC` |
-| CosmosAccount | ellipse | `#5C6BC0` |
-| RedisCache | ellipse | `#D32F2F` |
-| ServiceBusNamespace | ellipse | `#455A64` |
-| KeyVault | triangle | `#C8A400` |
-| ExternalService (for example SendGrid) | large box with name and category, one shared node per service | per-service color (SendGrid `#1A82E2`) |
-| External | ellipse with dashed border | `#9E9E9E` |
-| Tenant / Subscription / ResourceGroup | outlined box | `#BDBDBD` |
+| WebApp | `globe` | `#0078D4` |
+| WebAppSlot | `globe` | `#69AFE5` |
+| FunctionApp | `flash` | `#F2A900` |
+| ContainerApp | `cube` | `#008575` |
+| ContainerRegistry | `box_multiple` | `#004E46` |
+| SqlServer | `server` | `#2E7D32` |
+| SqlDatabase | `database` | `#66BB6A` |
+| StorageAccount | `storage` | `#7B1FA2` |
+| BlobContainer | `folder` | `#CE93D8` |
+| StorageQueue | `list` | `#AB47BC` |
+| CosmosAccount | `data_usage` | `#5C6BC0` |
+| RedisCache | `top_speed` | `#D32F2F` |
+| ServiceBusNamespace | `arrow_routing` | `#455A64` |
+| KeyVault | `key` | `#C8A400` |
+| ExternalService (for example SendGrid) | `cloud`, one shared node per service | per-service colour (SendGrid `#1A82E2`) |
+| External | `link` | `#9E9E9E` |
+| Tenant | `building` | `#BDBDBD` |
+| Subscription | `receipt` | `#BDBDBD` |
+| ResourceGroup | `group` | `#BDBDBD` |
 
-| Edge Type | Style |
+| Edge type | Style |
 |---|---|
-| CONNECTS_TO | solid with arrow |
-| REFERENCES_SECRET | dashed gold |
-| PULLS_IMAGE_FROM | dotted teal |
-| CONTAINS, HAS_SLOT, HOSTS_DATABASE, HAS_CONTAINER, HAS_QUEUE | thin gray |
-| Low-confidence edge | dashed, 50% opacity |
+| CONNECTS_TO | solid blue `#0078D4` with an arrow |
+| REFERENCES_SECRET | solid gold `#C8A400` with an arrow |
+| PULLS_IMAGE_FROM | solid teal `#008575` with an arrow |
+| Low-confidence edge | 35% opacity |
 
-- Hovering a node shows a plain-text tooltip with the name and type.
-- The selected node is highlighted, and its neighbors stay at full opacity while other nodes fade.
+- Edges never carry a text label. Parallel edges between the same two nodes are merged, and their width grows with the count.
+- Hovering or selecting a node fades every node and edge that is not a neighbour. Hovering shows a plain-text tooltip with the name and type.
+- **Overview** hides structural edges (CONTAINS, HAS_SLOT, HOSTS_DATABASE, HAS_CONTAINER, HAS_QUEUE) and scope nodes. **Focus** shows the centre (largest node), its one-hop neighbours, SQL servers and storage accounts as containers around their databases, containers, and queues, and aggregate nodes such as `SendGrid (+48 apps)`.
+- A collapsible **Legend** overlay at the bottom left lists each icon with its product name.
 - Suggested mockup scene: `shop-web` connects to `orders` (under `contoso-sql`), `uploads` (under `contosodata`), and `contoso-kv`. `orders-func` connects to `contosodata` and `contoso-bus`. `catalog-api` pulls from `contosoacr` and connects to `contoso-cache`. `billing-api` connects to the external node `10.0.0.5/hr`.
 
 #### Right Pane: Node Properties (about 340 px)
@@ -332,15 +343,34 @@ A `RadzenSplitter` with three resizable, collapsible panes.
 A `RadzenCard` for the selected node:
 
 - Header: node label (`orders`), type badge (SQL Database), and a link **Open in Azure portal** (`open_in_new` icon).
-- **Properties:** a `RadzenDataList` of key/value pairs, for example `sku: S1`, `status: Online`.
-- **Connections:** a `RadzenDataGrid` with Direction (In / Out icon), Edge type, Other node, and Setting keys (for example `ConnectionStrings:Orders`). Setting keys only, never values.
+- Buttons: **Focus** (`center_focus_strong`), **Expand** (`open_in_full`, Focus mode only, disabled with a reason when the node cannot be expanded), and **Open details**.
+- **Talks to:** for the Focus centre, a list of its dependencies grouped by category (for example Data, Secrets, External), with setting keys (for example `ConnectionStrings:Orders`). Setting keys only, never values. Each item is clickable and focuses that resource. If there are none, the panel says "No connections detected."
+- **Properties** and **Connections (n):** collapsed `RadzenPanel`s. Properties is a list of key/value pairs. Connections is a grid with Direction, Edge type, Other node, and Setting keys.
+- When an edge is selected, the panel shows its Source and Target and lists every merged underlying connection.
 - Empty state: "Select a node to see its details."
 
-### 7.2 States to Mock
+### 7.2 URL format
+
+The URL describes the mode, so links can be shared and bookmarked, and browser Back and Forward work.
+
+| URL | Mode |
+|---|---|
+| `/graph` | Overview |
+| `/graph?focus=<resource-id>` | Focus on one resource |
+| `/graph?focus=<resource-id>&expand=<resource-id>&expand=<resource-id>` | Focus plus expanded neighbours, in breadcrumb order |
+
+- Values are URL-encoded ARM resource IDs. Existing `graph?focus=` links (for example from the Inventory grids) now open Focus mode instead of the full graph.
+- Filters are not part of the URL.
+- Invalid, duplicate, or unknown `expand` values are dropped and a notification says how many. At most 20 expansions are kept.
+- A resource that is not in the signed-in user's scan shows the notification "This resource is not in your current scan." and falls back to the Overview.
+
+### 7.3 States to Mock
 
 - **No graph yet:** an info `RadzenAlert` "No graph available. Run a scan first." with a primary `RadzenButton` **Go to Inventory and Scan**. The canvas area is empty.
-- **Rendering:** a `RadzenProgressBarCircular` over the canvas with "Laying out graph...".
-- **Graph with a node selected:** as described above.
+- **Rendering:** a `RadzenProgressBarCircular` over the canvas with "Rendering graph...".
+- **Overview with a node selected:** as described above.
+- **Focus with an expansion:** a breadcrumb with two resource segments, **Copy link** visible, and the "Talks to" list for the selected node.
+- **Filtered:** active-filter chips in the left pane and a count caption such as "Showing 491 of 1,034 nodes".
 
 ---
 

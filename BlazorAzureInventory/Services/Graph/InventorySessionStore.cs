@@ -33,6 +33,9 @@ public sealed class InventorySession
 
     /// <summary>Pending and completed tag proposals, keyed by proposal ID.</summary>
     public Dictionary<string, TagProposal> TagProposals { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>Overview layouts for <see cref="Graph"/>, owned by <see cref="GraphLayoutService"/>. In memory only.</summary>
+    internal GraphViewCache? ViewCache { get; set; }
 }
 
 /// <summary>

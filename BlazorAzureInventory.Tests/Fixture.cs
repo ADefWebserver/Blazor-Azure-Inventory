@@ -122,4 +122,129 @@ internal static class Fixture
             configs.Select(c => matcher.Match(c, index)).ToList(),
             [new ScanIssue(BillingApi, "Reading config files", ScanIssueKind.AccessDenied, "403: SCM access denied.")]);
     }
+
+    public const int LargeContainersPerAccount = 10;
+    public const int LargeQueuesPerAccount = 2;
+
+    /// <summary>
+    /// Deterministic large estate for graph performance work (plan section 11.1): web apps with slots, SQL servers with
+    /// orphan databases, storage children, key vaults, one SendGrid hub, and low-confidence edges.
+    /// </summary>
+    public static InventorySnapshot LargeSnapshot(int apps = 400, int seed = 1)
+    {
+        var rng = new Random(seed);
+        var sqlServers = Math.Max(1, apps / 10);
+        var databases = apps * 95 / 100;
+        var consumedDatabases = databases - apps * 15 / 100;
+        var storageAccounts = Math.Max(1, apps * 3 / 40);
+        var containers = storageAccounts * LargeContainersPerAccount;
+        var queues = storageAccounts * LargeQueuesPerAccount;
+        var vaults = Math.Max(1, apps / 20);
+
+        var withSlot = Pick(rng, apps, apps / 10);
+        var withDatabase = Pick(rng, apps, apps - apps / 20);
+        var withSendGrid = Pick(rng, apps, apps * 30 / 100);
+        // Gives about 5% of the dependency edges.
+        var withLowConfidence = Pick(rng, apps, apps * 18 / 100);
+
+        var resources = new List<AzureResourceInfo>();
+
+        var serverIds = new string[sqlServers];
+        for (var s = 0; s < sqlServers; s++)
+        {
+            var name = $"contoso-sql-{s + 1:00}";
+            serverIds[s] = Id("rg-sql", $"microsoft.sql/servers/{name}");
+            resources.Add(Resource(serverIds[s], AzureResourceKind.SqlServer, endpoint: $"{name}.database.windows.net"));
+        }
+        for (var d = 0; d < databases; d++)
+        {
+            resources.Add(Resource($"{serverIds[d % sqlServers]}/databases/{LargeDatabaseName(d)}", AzureResourceKind.SqlDatabase, serverIds[d % sqlServers]));
+        }
+
+        var accountIds = new string[storageAccounts];
+        for (var a = 0; a < storageAccounts; a++)
+        {
+            accountIds[a] = Id("rg-storage", $"microsoft.storage/storageaccounts/{LargeAccountName(a)}");
+            resources.Add(Resource(accountIds[a], AzureResourceKind.StorageAccount, endpoint: $"https://{LargeAccountName(a)}.blob.core.windows.net/"));
+        }
+        for (var c = 0; c < containers; c++)
+        {
+            var account = accountIds[c / LargeContainersPerAccount];
+            resources.Add(Resource($"{account}/blobservices/default/containers/files-{c + 1:000}", AzureResourceKind.BlobContainer, account));
+        }
+        for (var q = 0; q < queues; q++)
+        {
+            var account = accountIds[q / LargeQueuesPerAccount];
+            resources.Add(Resource($"{account}/queueservices/default/queues/jobs-{q + 1:000}", AzureResourceKind.StorageQueue, account));
+        }
+
+        for (var v = 0; v < vaults; v++)
+        {
+            var name = $"contoso-kv-{v + 1:00}";
+            resources.Add(Resource(Id("rg-security", $"microsoft.keyvault/vaults/{name}"), AzureResourceKind.KeyVault, endpoint: $"https://{name}.vault.azure.net/"));
+        }
+
+        var queueConsumers = new Dictionary<int, int>();
+        for (var q = 0; q < queues; q++) queueConsumers[q * apps / queues] = q;
+
+        var analyzer = Analyzer;
+        var configs = new List<AppConfigAnalysis>(apps);
+        var dbConsumer = 0;
+        for (var i = 0; i < apps; i++)
+        {
+            var name = $"contoso-app-{i + 1:000}";
+            var appId = Id($"rg-apps-{i % 10 + 1:00}", $"microsoft.web/sites/{name}");
+            resources.Add(Resource(appId, AzureResourceKind.WebApp, endpoint: $"{name}.azurewebsites.net"));
+            if (withSlot.Contains(i))
+            {
+                resources.Add(Resource(appId + "/slots/staging", AzureResourceKind.WebAppSlot, appId, $"{name}-staging.azurewebsites.net",
+                    new() { ["siteName"] = name, ["slotName"] = "staging" }));
+            }
+
+            var c = i % containers;
+            var settings = new List<RawSetting>
+            {
+                new("Files:Uri", $"https://{LargeAccountName(c / LargeContainersPerAccount)}.blob.core.windows.net/files-{c + 1:000}", ConfigSource.AppServiceAppSetting, null),
+                new("ApiKey", $"@Microsoft.KeyVault(SecretUri=https://contoso-kv-{i % vaults + 1:00}.vault.azure.net/secrets/api-key/)", ConfigSource.AppServiceAppSetting, null),
+            };
+            if (withDatabase.Contains(i))
+            {
+                var d = dbConsumer++ % consumedDatabases;
+                settings.Add(new("ConnectionStrings:Main",
+                    $"Server=tcp:contoso-sql-{d % sqlServers + 1:00}.database.windows.net,1433;Initial Catalog={LargeDatabaseName(d)};Authentication=Active Directory Default;",
+                    ConfigSource.AppServiceConnectionString, null));
+            }
+            if (queueConsumers.TryGetValue(i, out var q))
+            {
+                settings.Add(new("Jobs:Uri", $"https://{LargeAccountName(q / LargeQueuesPerAccount)}.queue.core.windows.net/jobs-{q + 1:000}", ConfigSource.AppServiceAppSetting, null));
+            }
+            if (withSendGrid.Contains(i)) settings.Add(new("Email:SmtpHost", "smtp.sendgrid.net", ConfigSource.AppServiceAppSetting, null));
+            // No such container exists, so the hint stays Low and resolves to the storage account.
+            if (withLowConfidence.Contains(i)) settings.Add(new("Archive:ContainerName", "archive-missing", ConfigSource.AppServiceAppSetting, null));
+
+            configs.Add(new AppConfigAnalysis(appId, "Production", ConfigReadStatus.Read, ConfigReadStatus.NotScanned, [],
+                analyzer.Analyze(appId, null, "Production", settings)));
+        }
+
+        var matcher = Matcher;
+        var index = matcher.BuildIndex(resources);
+        return new InventorySnapshot(
+            new DateTimeOffset(2026, 10, 3, 12, 0, 0, TimeSpan.Zero),
+            [new TenantInfo(TenantId, "Contoso", "contoso.onmicrosoft.com")],
+            [new SubscriptionInfo(SubscriptionId, "Contoso Production", TenantId, "Enabled")],
+            [],
+            resources,
+            configs.Select(c => matcher.Match(c, index)).ToList(),
+            []);
+
+        static string LargeDatabaseName(int d) => $"db-{d + 1:000}";
+        static string LargeAccountName(int a) => $"contosost{a + 1:00}";
+
+        static HashSet<int> Pick(Random rng, int total, int count)
+        {
+            var order = Enumerable.Range(0, total).ToArray();
+            rng.Shuffle(order);
+            return order.Take(count).ToHashSet();
+        }
+    }
 }

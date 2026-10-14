@@ -23,16 +23,41 @@
                         }
                     </RadzenStack>
                 }
-                @if (EdgeKeys is { Length: > 0 } keys)
+                @if (MergedEdges.Count > 1)
                 {
-                    <RadzenStack Gap="0.1rem">
-                        <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">Setting keys</RadzenText>
-                        <span class="mono">@keys</span>
+                    <RadzenStack Gap="0.5rem" role="group" aria-label="Underlying connections">
+                        <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">Underlying connections (@MergedEdges.Count)</RadzenText>
+                        @foreach (var merged in MergedEdges)
+                        {
+                            var source = Index.NodesById.GetValueOrDefault(merged.Source);
+                            var target = Index.NodesById.GetValueOrDefault(merged.Target);
+                            <RadzenStack Gap="0.1rem">
+                                <span>@(source?.Label ?? merged.Source) → @(target?.Label ?? merged.Target)</span>
+                                @if (KeysOf(merged) is { Length: > 0 } mergedKeys)
+                                {
+                                    <span class="mono">@mergedKeys</span>
+                                }
+                                @if (merged.Data.GetValueOrDefault("confidence") is { } mergedConfidence)
+                                {
+                                    <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">Confidence: @mergedConfidence</RadzenText>
+                                }
+                            </RadzenStack>
+                        }
                     </RadzenStack>
                 }
-                @if (Edge.Data.GetValueOrDefault("confidence") is { } confidence)
+                else
                 {
-                    <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">Confidence: @confidence</RadzenText>
+                    if (EdgeKeys is { Length: > 0 } keys)
+                    {
+                        <RadzenStack Gap="0.1rem">
+                            <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">Setting keys</RadzenText>
+                            <span class="mono">@keys</span>
+                        </RadzenStack>
+                    }
+                    if (Edge.Data.GetValueOrDefault("confidence") is { } confidence)
+                    {
+                        <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">Confidence: @confidence</RadzenText>
+                    }
                 }
             </RadzenStack>
         </RadzenCard>
@@ -46,22 +71,36 @@
     }
     else
     {
+        var node = Node!;
         <RadzenCard>
             <RadzenStack Gap="1rem">
                 <RadzenStack Gap="0.25rem">
-                    <RadzenText TextStyle="TextStyle.H5" class="rz-m-0" Style="word-break: break-all;">@Node.Label</RadzenText>
+                    <RadzenText TextStyle="TextStyle.H5" class="rz-m-0" Style="word-break: break-all;">@node.Label</RadzenText>
                     <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
-                        <span class="type-swatch" style="background: @NodeTypeStyles.ColorOf(Node.Type);"></span>
-                        <RadzenBadge Text="@Node.Type" Shade="Shade.Lighter" BadgeStyle="BadgeStyle.Primary" IsPill="true" />
-                        @if (Node.IsTaggable())
+                        <span class="type-swatch" style="background: @NodeTypeStyles.ColorOf(node.Type);"></span>
+                        <RadzenBadge Text="@node.Type" Shade="Shade.Lighter" BadgeStyle="BadgeStyle.Primary" IsPill="true" />
+                        @if (node.IsTaggable())
                         {
-                            <RadzenBadge Text="@($"{Node.GetTags().Count} tags")" Shade="Shade.Lighter" BadgeStyle="BadgeStyle.Secondary" IsPill="true" />
+                            <RadzenBadge Text="@($"{node.GetTags().Count} tags")" Shade="Shade.Lighter" BadgeStyle="BadgeStyle.Secondary" IsPill="true" />
                         }
                     </RadzenStack>
-                    @if (Node.Type != nameof(AzureResourceKind.Tenant))
+                    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+                        @if (!IsFocusMode && node.Type != nameof(AzureResourceKind.Tenant))
+                        {
+                            <RadzenButton Text="Focus" Icon="center_focus_strong" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light"
+                                          Click="@(() => OnFocus.InvokeAsync(node.Id))" />
+                        }
+                        @if (IsFocusMode && node.Id != FocusId)
+                        {
+                            <RadzenButton Text="Expand" Icon="open_in_full" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light"
+                                          Disabled="@(!CanExpand)" title="@ExpandDisabledReason"
+                                          Click="@(() => OnExpand.InvokeAsync(node.Id))" />
+                        }
+                    </RadzenStack>
+                    @if (node.Type != nameof(AzureResourceKind.Tenant))
                     {
                         <RadzenButton Text="Open details" Icon="open_in_full" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light"
-                                      Style="align-self: flex-start;" Click="@(() => OnOpenDetails.InvokeAsync(Node.Id))" />
+                                      Style="align-self: flex-start;" Click="@(() => OnOpenDetails.InvokeAsync(node.Id))" />
                     }
                     @if (PortalUrl is { } url)
                     {
@@ -69,15 +108,22 @@
                     }
                 </RadzenStack>
 
-                <RadzenStack Gap="0.25rem">
-                    <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">Properties</RadzenText>
-                    <ResourcePropertiesTab Properties="@Properties" />
-                </RadzenStack>
+                @if (Dependencies is { Count: > 0 })
+                {
+                    <DependencySummaryList Groups="@Dependencies" OnSelect="@OnFocus" />
+                }
+                else if (IsFocusMode && Node.Id == FocusId)
+                {
+                    <RadzenText TextStyle="TextStyle.Body2" class="muted">No connections detected.</RadzenText>
+                }
 
-                <RadzenStack Gap="0.25rem">
-                    <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">Connections (@Connections.Count)</RadzenText>
+                <RadzenPanel AllowCollapse="true" Collapsed="true" Text="Properties">
+                    <ResourcePropertiesTab Properties="@Properties" />
+                </RadzenPanel>
+
+                <RadzenPanel AllowCollapse="true" Collapsed="true" Text="@($"Connections ({Connections.Count})")">
                     <ResourceConnectionsTab Connections="@Connections" LinkOthers="@LinkConnections" />
-                </RadzenStack>
+                </RadzenPanel>
             </RadzenStack>
         </RadzenCard>
     }
@@ -88,16 +134,30 @@
     [Parameter] public GraphEdge? Edge { get; set; }
     [Parameter] public GraphIndex? Index { get; set; }
     [Parameter] public EventCallback<string> OnOpenDetails { get; set; }
+    [Parameter] public EventCallback<string> OnFocus { get; set; }
+    [Parameter] public EventCallback<string> OnExpand { get; set; }
+    [Parameter] public bool IsFocusMode { get; set; }
+    [Parameter] public bool CanExpand { get; set; }
+    [Parameter] public string? ExpandDisabledReason { get; set; }
+    [Parameter] public string? FocusId { get; set; }
+    [Parameter] public IReadOnlyList<DependencyGroup>? Dependencies { get; set; }
+
+    /// <summary>Every original edge behind the selected (possibly merged) edge. Defaults to <see cref="Edge"/> alone.</summary>
+    [Parameter] public IReadOnlyList<GraphEdge>? Edges { get; set; }
     [Parameter] public bool LinkConnections { get; set; } = true;
+
+    private IReadOnlyList<GraphEdge> MergedEdges => Edges is { Count: > 0 } ? Edges : Edge is null ? [] : [Edge];
+
+    private static string? KeysOf(GraphEdge edge) => edge.Data.GetValueOrDefault("references") is List<EdgeReference> refs
+        ? string.Join(", ", refs.Select(r => r.SettingKey).Distinct())
+        : edge.Data.GetValueOrDefault("repositories") is List<string> repos ? string.Join(", ", repos) : null;
 
     private List<KeyValuePair<string, string>> Properties { get; set; } = new();
     private List<ConnectionRow> Connections { get; set; } = new();
 
     private string? PortalUrl => Node is null ? null : ResourceInspector.PortalUrl(Node);
 
-    private string? EdgeKeys => Edge?.Data.GetValueOrDefault("references") is List<EdgeReference> refs
-        ? string.Join(", ", refs.Select(r => r.SettingKey).Distinct())
-        : Edge?.Data.GetValueOrDefault("repositories") is List<string> repos ? string.Join(", ", repos) : null;
+    private string? EdgeKeys => Edge is null ? null : KeysOf(Edge);
 
     protected override void OnParametersSet()
     {

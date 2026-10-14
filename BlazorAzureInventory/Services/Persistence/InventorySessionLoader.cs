@@ -16,6 +16,7 @@ public sealed class InventorySessionLoader(
     IUserDataStore dataStore,
     AzureContextService azureContext,
     InventoryGraphBuilder graphBuilder,
+    GraphLayoutService layouts,
     UserContextAccessor userContext,
     IOptions<InventoryOptions> inventoryOptions,
     ILogger<InventorySessionLoader> logger)
@@ -77,6 +78,7 @@ public sealed class InventorySessionLoader(
             session.Source = SessionDataSource.Saved;
             session.HiddenSubscriptions = filtered.RemovedSubscriptions;
             store.Set(user, session);
+            layouts.WarmUp(session);
             await dataStore.TouchAsync(key, ct);
             LastOutcome = SessionLoadOutcome.FromSaved;
             logger.LogInformation("Loaded saved scan for {UserKey}: {ResourceCount} resources, {Hidden} subscriptions hidden",

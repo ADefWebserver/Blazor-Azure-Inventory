@@ -70,7 +70,7 @@ These controls are already in place and should be kept. Several findings build o
 
 ### Out of Scope
 
-- `bin/`, `obj/`, and published output. Third-party library source (Radzen, Bootstrap, vis-network, blazor.web.js) was not audited line by line, only checked for version and usage.
+- `bin/`, `obj/`, and published output. Third-party library source (Radzen, Bootstrap, Cytoscape.js, blazor.web.js) was not audited line by line, only checked for version and usage.
 - `BlazorAzureInventory.Tests` is reviewed only for dependencies, not as runtime attack surface.
 - Microsoft Entra app registration, Azure RBAC, and Container Apps settings that live outside this repository. Settings that the code depends on are called out where relevant.
 
@@ -839,7 +839,7 @@ Defense in depth:
 
 ### 4. Cross-Site Scripting (XSS)
 
-**Reviewed:** every `MarkupString` (only [MessageBubble.razor L22](../BlazorAzureInventory/Components/Chat/MessageBubble.razor#L22), which renders `MarkdownRenderer` output with HTML disabled), JS interop (`chat.js` and `graph-view.js` use `textContent` and DOM APIs, and vis-network receives DOM elements rather than HTML strings), unencoded output in JavaScript contexts (none), and user or AI content in Razor (rendered with `@` and encoded automatically). The CSP `script-src 'self'` blocks inline script as a second layer.
+**Reviewed:** every `MarkupString` (only [MessageBubble.razor L22](../BlazorAzureInventory/Components/Chat/MessageBubble.razor#L22), which renders `MarkdownRenderer` output with HTML disabled), JS interop (`chat.js` and `graph-view.js` use `textContent` and DOM APIs, and Cytoscape.js receives plain-text labels rather than HTML strings), unencoded output in JavaScript contexts (none), and user or AI content in Razor (rendered with `@` and encoded automatically). The CSP `script-src 'self'` blocks inline script as a second layer.
 
 **Result:** no XSS finding. The link-based exfiltration risk is covered in SEC-007.
 
@@ -1465,7 +1465,7 @@ var options = new OpenAIClientOptions
 
 ### 14. Dependencies and Supply Chain
 
-**Reviewed:** `dotnet list package --vulnerable --include-transitive` (clean), `--outdated`, `--deprecated`, the target framework (`net10.0`, a supported LTS release), client libraries (vis-network 10.1.2 and Bootstrap 5.3.3 are served locally, with no CDN at runtime, so Subresource Integrity does not apply), and the container base image. The full output is in the [Appendix](#appendix-package-vulnerability-report).
+**Reviewed:** `dotnet list package --vulnerable --include-transitive` (clean), `--outdated`, `--deprecated`, the target framework (`net10.0`, a supported LTS release), client libraries (Cytoscape.js 3.34.3, Fluent UI System Icons 1.1.344, and Bootstrap 5.3.3 are served locally, with no CDN at runtime, so Subresource Integrity does not apply), and the container base image. The full output is in the [Appendix](#appendix-package-vulnerability-report).
 
 #### SEC-014 - Azure MCP Server container image is not pinned
 
@@ -1516,7 +1516,7 @@ Add the image to Dependabot (`package-ecosystem: docker`) and scan it in CI (for
 
 - `Radzen.Blazor` 12.0.5 has an available patch, 12.0.7.
 - `xunit` 2.9.3 is deprecated (Legacy, with `xunit.v3` as the replacement). `xunit.runner.visualstudio` 3.1.5 has a newer 4.0.0. These are test-only.
-- `libman.json` downloads vis-network from jsdelivr with no integrity hash, so a compromised CDN would affect the vendored file at restore time.
+- `libman.json` downloads Cytoscape.js and the Fluent UI System Icons from jsdelivr with no integrity hash, so a compromised CDN would affect the vendored files at restore time. The files are committed, and `deploy/Verify-VendoredAssets.ps1` (run by the `verify-vendored-assets` GitHub Actions workflow) checks their SHA-256 hashes.
 - Bootstrap 5.3.3 is in `wwwroot/lib/bootstrap` but `App.razor` never references it (see SEC-017).
 
 **Recommended fix**
@@ -1526,7 +1526,7 @@ Add the image to Dependabot (`package-ecosystem: docker`) and scan it in CI (for
 ```
 
 - Plan the move to `xunit.v3`.
-- Commit the vendored `vis-network.min.js` and check its SHA-256 in CI. Do not restore it from the CDN during builds.
+- Keep the vendored `cytoscape.esm.min.mjs` and Fluent icon files committed and check their SHA-256 in CI (`deploy/vendored-assets.sha256`). Do not restore them from the CDN during builds.
 - Add `dotnet list package --vulnerable --include-transitive` to CI, and fail the build on any result.
 
 **Verification**
@@ -1666,7 +1666,7 @@ With `AllowedServiceTypes = ["AzureOpenAI"]`, choosing OpenAI in Settings and se
 | 16 | SEC-012 | Turn on peer-to-peer encryption in the Container Apps environment. Set the HTTPS-redirection override in run mode only. | The environment shows encryption enabled, and MCP tools still work. |
 | 17 | SEC-015 | Choose Option A (ephemeral, single replica) or Option B (Blob plus Key Vault key ring, distributed token cache, shared session store) before raising `MaxReplicas`. | The key ring is protected at rest, or deliberately ephemeral. |
 | 18 | SEC-018 | Add an `AI:AllowedServiceTypes` setting for each deployment, plus a data-handling notice in Settings. | Providers that are not allowed are rejected. |
-| 19 | SEC-019 | Update Radzen to 12.0.7. Migrate to `xunit.v3`. Check the vendored vis-network hash in CI. Add the `--vulnerable` CI gate. | `--outdated` and `--vulnerable` are clean for the runtime projects. |
+| 19 | SEC-019 | Update Radzen to 12.0.7. Migrate to `xunit.v3`. Check the vendored-asset hashes in CI (`deploy/Verify-VendoredAssets.ps1`, in place). Add the `--vulnerable` CI gate. | `--outdated` and `--vulnerable` are clean for the runtime projects. |
 
 ---
 
@@ -1739,7 +1739,7 @@ public class MarkdownRendererSecurityTests
 - `dotnet list package --vulnerable --include-transitive` (fail on any result)
 - Dependabot for NuGet and Docker
 - CodeQL `csharp` security-and-quality queries
-- A SHA-256 check for vendored `wwwroot/lib` files
+- A SHA-256 check for vendored `wwwroot/lib` files (`.github/workflows/verify-vendored-assets.yml`, which runs `deploy/Verify-VendoredAssets.ps1` against `deploy/vendored-assets.sha256`)
 
 ---
 
@@ -1771,6 +1771,7 @@ public class MarkdownRendererSecurityTests
 | BlazorAzureInventory | Microsoft.Extensions.AI.OpenAI | 10.10.1 | 10.10.1 | Current |
 | BlazorAzureInventory | Microsoft.Identity.Web | 4.16.0 | 4.16.0 | Current |
 | BlazorAzureInventory | Microsoft.Identity.Web.UI | 4.16.0 | 4.16.0 | Current |
+| BlazorAzureInventory | Microsoft.Msagl | 1.1.6 | 1.1.6 | Current (last release 2023, MIT). Server-side graph layout, no network access |
 | BlazorAzureInventory | ModelContextProtocol | 2.2.0 | 2.2.0 | Current |
 | BlazorAzureInventory | OpenAI | 2.14.0 | 2.14.0 | Current |
 | BlazorAzureInventory | Radzen.Blazor | 12.0.5 | **12.0.7** | Outdated (patch) |
@@ -1792,7 +1793,8 @@ public class MarkdownRendererSecurityTests
 
 | Component | Version | Source | Loaded from | Notes |
 |---|---|---|---|---|
-| vis-network | 10.1.2 | LibMan, jsdelivr | Local `wwwroot/lib` (ES module import) | No integrity hash at restore (SEC-019) |
+| Cytoscape.js | 3.34.3 (`dist/cytoscape.esm.min.mjs`, SHA-256 `c299a4d5de7af08dfa7813f8eec4e2a2ef4f700f490f4505b408a0ce57e8e816`) | LibMan, jsdelivr | Local `wwwroot/lib/cytoscape` (ES module import) | MIT. No integrity hash at restore. The file is committed and checked in CI (SEC-019). Replaces vis-network |
+| @fluentui/svg-icons | 1.1.344 (19 SVG files, hashes in `deploy/vendored-assets.sha256`) | LibMan, jsdelivr | Local `wwwroot/lib/fluent-icons`, fetched by `graph-icons.js` (`connect-src 'self'`) | MIT, license text committed. Same restore and CI handling as Cytoscape.js |
 | Bootstrap | 5.3.3 | Template | Not referenced | Unused, remove (SEC-017) |
 | Radzen.Blazor.js | 12.0.5 | NuGet static web asset | `_content/Radzen.Blazor` | Update together with the package |
 | blazor.web.js | .NET 10 | Framework | `_framework` (fingerprinted) | Current |

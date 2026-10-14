@@ -20,6 +20,7 @@ public sealed class InventoryScanOrchestrator(
     ResourceMatcher matcher,
     InventoryGraphBuilder graphBuilder,
     InventorySessionStore store,
+    GraphLayoutService layouts,
     UserContextAccessor userContext,
     IUserDataStore dataStore,
     Quotas.UserQuotaService quotas,
@@ -211,6 +212,7 @@ public sealed class InventoryScanOrchestrator(
         session.Source = SessionDataSource.Scan;
         session.HiddenSubscriptions = 0;
         store.Set(user, session);
+        layouts.WarmUp(session);
         progress.Report(new ScanProgress(stage, 1, 1, null));
 
         logger.LogInformation("Scan completed: {ResourceCount} resources, {AppCount} apps analyzed, {IssueCount} issues, {NodeCount} nodes, {EdgeCount} edges",
@@ -283,6 +285,7 @@ public sealed class InventoryScanOrchestrator(
         session.Graph = graph;
         session.Index = new GraphIndex(graph);
         store.Set(user, session);
+        layouts.WarmUp(session);
         return graph;
     }
 }

@@ -3,6 +3,7 @@ using BlazorAzureInventory.Models.Graph;
 using BlazorAzureInventory.Services.AI.GraphTools;
 using BlazorAzureInventory.Services.Analysis;
 using BlazorAzureInventory.Services.Graph;
+using Xunit.Abstractions;
 
 namespace BlazorAzureInventory.Tests;
 
@@ -168,5 +169,78 @@ public class InventoryGraphToolsTests
         Assert.True(tools.SearchNodes("", null, 1000).Length <= 2);
         Assert.True(tools.ListUnreferencedResources(null, 1000).Length <= 2);
         Assert.True(tools.ListApps(null, null, null, 1000).Length <= 2);
+    }
+}
+
+public class LargeFixtureTests(ITestOutputHelper output)
+{
+    private static readonly HashSet<string> Structural =
+        [EdgeTypes.Contains, EdgeTypes.HasSlot, EdgeTypes.HostsDatabase, EdgeTypes.HasContainer, EdgeTypes.HasQueue];
+
+    [Fact]
+    public void Large_snapshot_matches_the_plan_counts()
+    {
+        var graph = Fixture.Builder().Build(Fixture.LargeSnapshot(), new GraphBuildOptions());
+        int Count(string type) => graph.Nodes.Count(n => n.Type == type);
+
+        Assert.Equal(400, Count("WebApp"));
+        Assert.Equal(40, Count("WebAppSlot"));
+        Assert.Equal(40, Count("SqlServer"));
+        Assert.Equal(380, Count("SqlDatabase"));
+        Assert.Equal(30, Count("StorageAccount"));
+        Assert.Equal(300, Count("BlobContainer"));
+        Assert.Equal(60, Count("StorageQueue"));
+        Assert.Equal(20, Count("KeyVault"));
+        Assert.Equal(0, Count("External"));
+        Assert.InRange(graph.Nodes.Count, 1250, 1350);
+
+        var hub = Assert.Single(graph.Nodes, n => n.Type == "ExternalService");
+        Assert.Equal(120, graph.Edges.Count(e => e.Target == hub.Id));
+
+        var consumed = graph.Edges.Where(e => e.Type == EdgeTypes.ConnectsTo).Select(e => e.Target).ToHashSet();
+        Assert.Equal(60, graph.Nodes.Count(n => n.Type == "SqlDatabase" && !consumed.Contains(n.Id)));
+
+        var dependencies = graph.Edges.Where(e => !Structural.Contains(e.Type)).ToList();
+        var low = dependencies.Count(e => e.Data.GetValueOrDefault("confidence") as string == "Low");
+        Assert.InRange(low / (double)dependencies.Count, 0.04, 0.06);
+
+        var ids = graph.Nodes.Select(n => n.Id).ToHashSet();
+        Assert.All(graph.Edges, e => Assert.True(ids.Contains(e.Source) && ids.Contains(e.Target)));
+    }
+
+    [Fact]
+    public void Large_snapshot_is_deterministic_per_seed()
+    {
+        static string Json(int seed) => System.Text.Json.JsonSerializer.Serialize(
+            Fixture.Builder().Build(Fixture.LargeSnapshot(seed: seed), new GraphBuildOptions()), GraphJson.Options);
+
+        Assert.Equal(Json(1), Json(1));
+        Assert.NotEqual(Json(1), Json(2));
+    }
+
+    // Baseline for the graph performance plan (T0, AC11): logs the size of the full GraphDocument stream.
+    // Set GRAPH_FIXTURE_OUT to a file path to also write the payload for browser measurements.
+    [Theory]
+    [InlineData(400)]
+    [InlineData(1200)]
+    public void Baseline_full_graph_payload(int apps)
+    {
+        var snapshot = Fixture.LargeSnapshot(apps);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var graph = Fixture.Builder().Build(snapshot, new GraphBuildOptions());
+        var buildMs = sw.Elapsed.TotalMilliseconds;
+        sw.Restart();
+        var bytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(graph, GraphJson.Options);
+        var serializeMs = sw.Elapsed.TotalMilliseconds;
+
+        var dependencies = graph.Edges.Count(e => !Structural.Contains(e.Type));
+        output.WriteLine($"apps={apps} nodes={graph.Nodes.Count} edges={graph.Edges.Count} (dependency {dependencies}) " +
+                         $"payload={bytes.Length:N0} bytes build={buildMs:F0} ms serialize={serializeMs:F0} ms");
+
+        if (apps == 400 && Environment.GetEnvironmentVariable("GRAPH_FIXTURE_OUT") is { Length: > 0 } path)
+        {
+            File.WriteAllBytes(path, bytes);
+        }
+        Assert.True(bytes.Length > 0);
     }
 }

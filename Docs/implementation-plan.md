@@ -46,7 +46,7 @@ These decisions were confirmed with the product owner before this plan was writt
 | Topic | Decision |
 |---|---|
 | Hosting | Blazor Server (.NET 10, global `InteractiveServer` render mode) on **Azure App Service (Linux)** |
-| UI library | **Radzen.Blazor** for all UI. **vis-network** for the graph canvas, because Radzen has no network-graph component |
+| UI library | **Radzen.Blazor** for all UI. **Cytoscape.js** for the graph canvas, because Radzen has no network-graph component |
 | Azure access | **Hybrid.** Users sign in with Entra ID. The **Azure SDK for .NET** handles deterministic inventory. A self-hosted **Azure MCP Server** (HTTP transport, On-Behalf-Of) supplies extended and AI tools. The **Azure CLI is not used at runtime** (see [3.1](#31-azure-access-approach-sdk-vs-mcp-server-vs-cli)) |
 | Tenancy | **Multi-tenant.** Any Entra ID organization can sign in, with an optional tenant allowlist |
 | Subscription scope | **All subscriptions the user can access**, with a subscription filter |
@@ -131,7 +131,7 @@ Use the latest stable versions. Pin versions in the `.csproj` and enable NuGet a
 | Markdown rendering in chat | `Markdig` |
 | Tests | `xunit`, `FluentAssertions` (or `Shouldly`), `bunit`, `NSubstitute` |
 
-Client-side library: **vis-network**. Ship a **local copy** under `wwwroot/lib/vis-network/` (managed with LibMan) rather than loading it from a CDN. This lets a strict Content Security Policy (CSP) apply without external script origins.
+Client-side libraries: **Cytoscape.js** for the graph canvas and **Fluent UI System Icons** for the node glyphs. Ship **local copies** under `wwwroot/lib/cytoscape/` and `wwwroot/lib/fluent-icons/` (managed with LibMan and committed) rather than loading them from a CDN. This lets a strict Content Security Policy (CSP) apply without external script origins. Node positions come from the `Microsoft.Msagl` NuGet package on the server. See [Knowledge-Graph-Performance-UX-Plan.md](Knowledge-Graph-Performance-UX-Plan.md).
 
 ---
 
@@ -312,10 +312,12 @@ BlazorAzureInventorySolution/
         ├── app.css
         ├── + js/
         │   ├── + graph-view.js
+        │   ├── + graph-icons.js
         │   └── + chat.js
         └── lib/
             ├── bootstrap/
-            └── + vis-network/
+            ├── + cytoscape/
+            └── + fluent-icons/
 ```
 
 ---
@@ -1140,36 +1142,37 @@ public sealed class InventorySession
 
 ## 11. Feature: Knowledge Graph Visualization
 
+> **Updated.** The graph originally used vis-network with client-side physics. It now has an Overview and a Focus mode, server-side layout, and a Cytoscape.js renderer. The design is in [Knowledge-Graph-Performance-UX-Plan.md](Knowledge-Graph-Performance-UX-Plan.md), and the screen is described in [screen-descriptions.md](screen-descriptions.md#7-knowledge-graph). The subsections below keep the original design and are marked where they were superseded.
+
 ### 11.1 Approach
 
-Radzen has no force-directed network component. The canvas therefore uses **vis-network**, as in the reference project. Every surrounding control (filters, panels, toolbar, dialogs) is Radzen.
+Radzen has no network-graph component. The canvas therefore uses **Cytoscape.js** (originally vis-network, as in the reference project). Every surrounding control (filters, panels, toolbar, dialogs) is Radzen.
 
 ### 11.2 Graph Page Layout (Graph.razor)
 
 - A `RadzenSplitter` with three panes:
   - **Left (`GraphFilterPanel`):**
-    - `RadzenCheckBoxList` of node types. Defaults: everything except Tenant, Subscription, and ResourceGroup.
+    - `RadzenCheckBoxList` of node types. Defaults: everything except Tenant, Subscription, and ResourceGroup. *(Superseded: types are grouped by category.)*
     - Multi-select `RadzenDropDown` controls for subscriptions and resource groups.
-    - `RadzenSwitch` toggles: *Only connected nodes*, *Hide external*, *Hide emulator*, *Show low-confidence edges*.
-    - A `RadzenAutoComplete` node search that calls `focusNode`.
-  - **Center (`GraphCanvas`):** the vis-network container, with a toolbar of `RadzenButton` controls: **Fit**, **Stabilize / Freeze physics**, and **Rebuild graph** (re-runs the builder from the cached snapshot without rescanning).
-  - **Right (`NodePropertiesPanel`):** a `RadzenCard` for the selected node. It shows the label, type, a link to the Azure portal (`https://portal.azure.com/#@{tenant}/resource{armId}`), and a `RadzenDataList` of `Data` key/value pairs. Below that, a `RadzenDataGrid` lists incoming and outgoing edges with their `references` (setting keys, never values).
+    - `RadzenSwitch` toggles: *Only connected nodes*, *Hide external*, *Hide emulator*, *Show low-confidence edges*, *Show child resources*.
+    - A `RadzenAutoComplete` node search that opens Focus mode for the chosen resource.
+  - **Center (`GraphCanvas`):** the Cytoscape container, with a toolbar button **Fit**. **Rebuild graph** (re-runs the builder from the cached snapshot without rescanning) and **Export JSON** are in the page header's overflow menu.
+  - **Right (`NodePropertiesPanel`):** a `RadzenCard` for the selected node. It shows the label, type, a link to the Azure portal (`https://portal.azure.com/#@{tenant}/resource{armId}`), **Focus** and **Expand** buttons, and the "Talks to" dependency list. The Properties (`Data` key/value pairs) and Connections (incoming and outgoing edges with their `references`: setting keys, never values) sections are collapsed panels.
 - When no graph exists, show a `RadzenAlert` with a **Go to Inventory and Scan** button.
 
 ### 11.3 JavaScript Module (wwwroot/js/graph-view.js)
 
-Exposed as an ES module and imported with `IJSRuntime.InvokeAsync<IJSObjectReference>("import", "./js/graph-view.js")`.
+Exposed as an ES module and imported with `IJSRuntime.InvokeAsync<IJSObjectReference>("import", "./js/graph-view.js")`. The current contract is in [section 6.8 of the performance plan](Knowledge-Graph-Performance-UX-Plan.md#68-js-module-contract-wwwrootjsgraph-viewjs-rewritten). In short:
 
 | Function | Purpose |
 |---|---|
-| `init(containerId, dotNetRef)` | Creates the network with options (physics `barnesHut`, `stabilization.iterations = 200`, `interaction.hover = true`) |
-| `renderFromStream(streamRef)` | Reads a `DotNetStreamReference` (`await streamRef.arrayBuffer()`), parses JSON, builds `DataSet`s, applies type styles, and renders |
-| `applyFilter(filterState)` | Shows or hides nodes and edges by type, subscription, resource group, connectivity, and confidence, using `DataSet.update({ id, hidden })` |
-| `focusNode(id)` | Selects the node and calls `network.focus` with animation |
-| `fit()` / `setPhysics(enabled)` | Toolbar actions |
-| `dispose()` | Destroys the network and releases the .NET reference |
+| `init(containerId, dotNetRef, options)` | Creates the Cytoscape instance (WebGL with automatic canvas fallback) |
+| `render(streamRef)` | Reads a `DotNetStreamReference`, parses the `GraphViewPayload`, and draws it with the server-computed positions |
+| `applyFilter(filterState, matchedTagIndexes)` | Shows or hides elements by type, subscription, resource group, connectivity, and confidence in one batch |
+| `center(index)` / `fit()` / `highlightChanges(added, changed)` | Selection, toolbar, and change-outline actions |
+| `dispose()` | Destroys the instance and releases the .NET reference |
 
-Callbacks into .NET (`[JSInvokable]` on `GraphCanvas`): `OnRenderComplete(int nodes, int edges)` and `OnNodeSelected(string id)`.
+Callbacks into .NET (`[JSInvokable]` on `GraphCanvas`) report render completion, node and edge selection, and opening a node's details. Nodes are referred to by index into the payload, not by resource ID.
 
 **XSS safety:** resource names, tags, and setting keys are tenant-controlled data. Tooltips (`title`) must be built as DOM elements with `textContent`. HTML strings are never used, and `innerHTML` is never called with graph data.
 
@@ -1186,6 +1189,8 @@ await _module.InvokeVoidAsync("renderFromStream", streamRef);
 ```
 
 ### 11.5 Node Styling
+
+> **Superseded.** Nodes are now circles filled with the type colour (palette unchanged) and a white Fluent UI System Icon. Edges are straight, with arrows and no labels. The per-type icons, colours, and edge styles are in [screen-descriptions.md](screen-descriptions.md#7-knowledge-graph) and [section 5.4 and 5.5 of the performance plan](Knowledge-Graph-Performance-UX-Plan.md#54-visual-rules-cytoscape-style). The original vis-network shapes are kept below for reference.
 
 | Type | Shape | Color (suggested) |
 |---|---|---|
@@ -1207,9 +1212,9 @@ Edge styles: `CONNECTS_TO` is solid with an arrow. `REFERENCES_SECRET` is dashed
 
 ### 11.6 Performance Guidance
 
-- For more than about 1,500 nodes, set `layout.improvedLayout = false` and turn physics off after `stabilizationIterationsDone`.
-- Default filters hide Tenant, Subscription, and ResourceGroup nodes, and use the container cap from [10.5](#105-builder-algorithm-inventorygraphbuilder).
-- Optional: cluster by resource group with `network.cluster` when there are more than 3,000 nodes.
+- Positions are computed on the server (MSAGL, with a timeout and a deterministic fallback) and cached per session, so the browser does no physics.
+- The Overview folds child resources into their parent and hides structural edges. Focus mode shows one resource and its direct neighbours.
+- Default filters hide Tenant, Subscription, and ResourceGroup nodes, turn **Only connected nodes** on, and use the container cap from [10.5](#105-builder-algorithm-inventorygraphbuilder).
 
 ### 11.7 Rendering Sequence
 
@@ -1219,18 +1224,20 @@ sequenceDiagram
     participant P as Graph.razor
     participant S as InventorySessionStore
     participant JS as graph-view.js
-    participant V as vis-network
+    participant L as GraphLayoutService
+    participant V as Cytoscape.js
     P->>S: Get session for current user
     S-->>P: GraphDocument
-    P->>P: Serialize graph to UTF-8 JSON stream
-    P->>JS: renderFromStream with DotNetStreamReference
+    P->>P: Project the Overview (or Focus) into a GraphViewPayload
+    P->>L: Get the cached Overview layout
+    L-->>P: Node positions
+    P->>JS: render with DotNetStreamReference
     JS->>JS: Read stream and parse JSON
-    JS->>V: Create DataSets and Network
-    V-->>JS: stabilizationIterationsDone
+    JS->>V: Create elements with preset positions
     JS->>P: OnRenderComplete with node and edge counts
     V-->>JS: Node clicked
-    JS->>P: OnNodeSelected with node id
-    P->>S: Lookup node data and edges via GraphIndex
+    JS->>P: OnNodeSelected with node index
+    P->>S: Map the index to a node and look up its edges via GraphIndex
     P-->>P: Render NodePropertiesPanel
 ```
 
@@ -1600,7 +1607,7 @@ flowchart TB
 
 Add middleware that sets the following headers:
 
-- `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss:; frame-ancestors 'none'`. Radzen needs inline styles. vis-network is served locally.
+- `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss:; frame-ancestors 'none'`. Radzen needs inline styles. Cytoscape.js and the Fluent icons are served locally.
 - `X-Content-Type-Options: nosniff`
 - `Referrer-Policy: strict-origin-when-cross-origin`
 
@@ -1615,7 +1622,7 @@ Add middleware that sets the following headers:
 | **A03 Injection** | The Resource Graph KQL is a static constant, and subscription IDs are validated GUIDs passed as parameters. Razor encodes output. Graph tooltips use `textContent`. Markdig runs with HTML disabled |
 | **A04 Insecure Design** | `ConfigEntry` has no value field. The design is read-only end to end. The MCP tool allowlist is enforced both server-side and client-side |
 | **A05 Security Misconfiguration** | CSP and security headers. Detailed errors only in Development. The MCP server never runs with `--dangerously-*` flags |
-| **A06 Vulnerable Components** | NuGet audit and Dependabot. The MCP image is pinned by digest. vis-network is a local copy with a pinned version |
+| **A06 Vulnerable Components** | NuGet audit and Dependabot. The MCP image is pinned by digest. Cytoscape.js and the Fluent icons are local copies with pinned versions, and the Cytoscape file's SHA-256 is checked in CI |
 | **A07 Identification and Authentication Failures** | Entra ID with tenant-level Conditional Access and MFA. Optional tenant allowlist. Consent and step-up go through the consent handler. Sign-out uses a POST with antiforgery |
 | **A08 Software and Data Integrity** | Pinned container digest. Signed deployment pipeline. No dynamic script loading |
 | **A09 Logging and Monitoring Failures** | Structured logs record IDs, counts, and stages only. HTTP logging redacts `Authorization`, and query strings are excluded. Audit events record sign-in, scan start and completion (counts), and chat tool names. Values and API keys are never logged |
@@ -1697,7 +1704,7 @@ flowchart LR
 
 | Phase | Deliverables | Exit Criteria |
 |---|---|---|
-| **0 Foundations** | Add Radzen (theme in `App.razor`, `RadzenComponents` in `MainLayout`, `RadzenPanelMenu` nav). Options classes and `appsettings.json` sections. Test project. vis-network local library | App runs under Aspire with the Radzen layout. Tests run |
+| **0 Foundations** | Add Radzen (theme in `App.razor`, `RadzenComponents` in `MainLayout`, `RadzenPanelMenu` nav). Options classes and `appsettings.json` sections. Test project. Cytoscape.js local library | App runs under Aspire with the Radzen layout. Tests run |
 | **1 Authentication** | Entra app registrations. Microsoft.Identity.Web setup. `LoginDisplay`. `AuthorizeRouteView`. Logout endpoint. `UserTokenCredential`, `ArmClientFactory`, `AzureContextService`. `SubscriptionPicker` with consent handling | [6.8](#68-acceptance-criteria) satisfied |
 | **2 Inventory** | `ResourceGraphInventoryService`, `ResourceEnrichmentService` (containers, slots), `InventoryScanOrchestrator` with progress and cancel. `Inventory.razor` tabs and grids. `InventorySessionStore` (snapshot only) | [7.7](#77-acceptance-criteria) satisfied |
 | **3 Configuration parsing** | `AppConfigurationReader` (app settings, connection strings, slots, Container App env). `KuduConfigFileReader` + `ScmHostValidator`. `ConfigFlattener`. `SecretClassifier`. `AppConfiguration.razor` | [8.6](#86-acceptance-criteria) satisfied. Sentinel test passes for this layer |
@@ -1739,4 +1746,4 @@ flowchart LR
 - Microsoft.Extensions.AI: <https://learn.microsoft.com/dotnet/ai/microsoft-extensions-ai>
 - Model Context Protocol C# SDK: <https://github.com/modelcontextprotocol/csharp-sdk>
 - Radzen Blazor components: <https://blazor.radzen.com/>
-- vis-network documentation: <https://visjs.github.io/vis-network/docs/network/>
+- Cytoscape.js documentation: <https://js.cytoscape.org/>

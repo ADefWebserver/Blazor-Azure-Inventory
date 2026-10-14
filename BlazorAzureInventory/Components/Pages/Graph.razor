@@ -2,11 +2,14 @@
 @attribute [Authorize]
 @implements IDisposable
 @using BlazorAzureInventory.Components.Graph
+@using BlazorAzureInventory.Models.Options
 @using BlazorAzureInventory.Services.Persistence
 @using BlazorAzureInventory.Services.Scan
 @inject InventorySessionStore Store
 @inject InventorySessionLoader Loader
 @inject UserPreferencesService Preferences
+@inject GraphViewService GraphViews
+@inject GraphLayoutService GraphLayouts
 @inject BlazorAzureInventory.Services.Changes.ChangeTrackingService ChangeTracking
 @inject BlazorAzureInventory.Services.Reports.FileDownloadService Downloads
 @inject UserContextAccessor UserContext
@@ -14,6 +17,8 @@
 @inject InventoryScanOrchestrator Orchestrator
 @inject ResourceDialogLauncher Launcher
 @inject NavigationManager Nav
+@inject NotificationService Notifications
+@inject Microsoft.Extensions.Options.IOptions<GraphViewOptions> GraphViewOptions
 
 <PageTitle>Knowledge Graph - Azure Inventory</PageTitle>
 
@@ -34,10 +39,53 @@
                                   ButtonStyle="ButtonStyle.Light" Click="@ToggleChangesAsync"
                                   title="Outline resources added (green) or changed (orange) since the previous scan" />
                 }
-                <RadzenButton Text="Export JSON" Icon="download" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@ExportJsonAsync" />
+                @if (_route is not null)
+                {
+                    <RadzenButton Text="Copy link" Icon="content_copy" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@CopyLinkAsync" />
+                }
+                <details class="graph-overflow">
+                    <summary aria-label="More graph actions"><RadzenIcon Icon="more_vert" /></summary>
+                    <div class="graph-overflow-menu">
+                        <button type="button" @onclick="RebuildAsync">Rebuild graph</button>
+                        <button type="button" @onclick="ExportJsonAsync">Export JSON</button>
+                    </div>
+                </details>
             </RadzenStack>
         }
     </RadzenStack>
+
+    @if (_route is not null && _index is not null)
+    {
+        <nav class="graph-breadcrumb" aria-label="Graph navigation">
+            <button type="button" @onclick="() => NavigateToBreadcrumbAsync(-1)">Overview</button>
+            <span aria-hidden="true">›</span>
+            @for (var i = -1; i < _route.Expand.Count; i++)
+            {
+                var expandedCount = i + 1;
+                var id = i < 0 ? _route.Focus : _route.Expand[i];
+                var label = _index.NodesById.GetValueOrDefault(id)?.Label ?? id;
+                <button type="button" aria-current="@(i == _route.Expand.Count - 1 ? "page" : null)"
+                        @onclick="() => NavigateToBreadcrumbAsync(expandedCount)">@label</button>
+                @if (i < _route.Expand.Count - 1)
+                {
+                    <span aria-hidden="true">›</span>
+                }
+            }
+        </nav>
+    }
+
+    @if (_copyUrl is not null)
+    {
+        <div class="graph-copy-backdrop" role="presentation" @onclick="() => _copyUrl = null">
+            <section class="graph-copy-dialog" role="dialog" aria-modal="true" aria-labelledby="graph-copy-title"
+                     @onclick:stopPropagation="true">
+                <h2 id="graph-copy-title">Copy graph link</h2>
+                <p>Clipboard access was unavailable. Copy this link manually.</p>
+                <input type="text" value="@_copyUrl" readonly aria-label="Graph link" />
+                <RadzenButton Text="Close" ButtonStyle="ButtonStyle.Light" Click="@(() => _copyUrl = null)" />
+            </section>
+        </div>
+    }
 
     @if (_graph is null || _index is null || _facets is null)
     {
@@ -53,36 +101,49 @@
     {
         <RadzenSplitter class="graph-page">
             <RadzenSplitterPane Size="280px" Min="200px" Collapsible="true">
-                <GraphFilterPanel Facets="@_facets" Filter="@_filter" Nodes="@_graph.Nodes" FilterChanged="@ApplyFilterAsync" OnFindNode="@FindNodeAsync" />
+                <GraphFilterPanel Facets="@_facets" Filter="@_filter" Nodes="@_graph.Nodes" FilterChanged="@ApplyFilterAsync" OnFindNode="@NavigateToFocus" />
             </RadzenSplitterPane>
             <RadzenSplitterPane>
                 <div class="graph-pane" style="overflow: hidden;">
-                    <GraphCanvas @ref="_canvas" Graph="@_graph" Filter="@_filter" OnNodeSelected="@OnNodeSelected" OnRendered="@OnRenderedAsync"
-                                 OnRebuild="@RebuildAsync" OnNodeOpen="@OpenDetailsAsync" OnEdgeSelected="@OnEdgeSelected" />
+                    <GraphCanvas @ref="_canvas" View="@_view" Filter="@_filter" OnNodeSelected="@OnNodeSelected" OnRendered="@OnRenderedAsync"
+                             OnNodeOpen="@OpenDetailsByIndexAsync" OnEdgeSelected="@OnEdgeSelected" />
                 </div>
             </RadzenSplitterPane>
             <RadzenSplitterPane Size="340px" Min="240px" Collapsible="true">
-                <NodePropertiesPanel Node="@_selected" Edge="@_selectedEdge" Index="@_index" OnOpenDetails="@OpenDetailsAsync" />
+            <NodePropertiesPanel Node="@_selected" Edge="@_selectedEdge" Edges="@_selectedEdges" Index="@_index" OnOpenDetails="@OpenDetailsAsync"
+                                 OnFocus="@NavigateToFocus" OnExpand="@ExpandSelectedAsync"
+                                 IsFocusMode="@(_route is not null)" CanExpand="@CanExpandSelected"
+                                 ExpandDisabledReason="@ExpandDisabledReason"
+                                 FocusId="@_route?.Focus" Dependencies="@_dependencies" />
             </RadzenSplitterPane>
         </RadzenSplitter>
     }
 </RadzenStack>
 
 @code {
-    [SupplyParameterFromQuery] public string? Focus { get; set; }
+    [SupplyParameterFromQuery(Name = "focus")] public string? Focus { get; set; }
+    [SupplyParameterFromQuery(Name = "expand")] public string[]? Expand { get; set; }
 
     private GraphDocument? _graph;
     private GraphIndex? _index;
+    private GraphViewPayload? _view;
     private GraphFacets? _facets;
+    private IReadOnlyList<DependencyGroup> _dependencies = [];
     private GraphNode? _selected;
     private GraphEdge? _selectedEdge;
+    private IReadOnlyList<GraphEdge> _selectedEdges = [];
     private GraphCanvas? _canvas;
-    private string? _pendingFocus;
     private string? _sessionKey;
+    private InventorySession? _session;
     private InventorySnapshot? _snapshot;
     private SessionDataSource? _source;
     private SnapshotDiff? _changes;
+    private GraphFocusRoute? _route;
+    private bool _initialized;
+    private bool _routeRendered;
     private bool _showChanges;
+    private bool _overviewShowsChildren;
+    private string? _copyUrl;
     private readonly GraphFilterState _filter = new()
     {
         NodeTypes = NodeTypeStyles.All.Select(t => t.Type).Where(t => !NodeTypeStyles.HiddenByDefault.Contains(t)).ToList()
@@ -93,18 +154,25 @@
         var user = await UserContext.GetUserAsync();
         _sessionKey = InventorySessionStore.KeyFor(user);
         var session = await Loader.EnsureLoadedAsync();
+        _session = session;
         _snapshot = session?.Snapshot;
         _source = session?.Source;
         RestoreFilter((await Preferences.GetAsync()).GraphFilter);
-        Load(session?.Graph, session?.Index);
         _changes = await ChangeTracking.GetChangesAsync();
-        _pendingFocus = Focus;
         Store.TagsChanged += OnTagsChanged;
+        _initialized = true;
+        await RenderRouteAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_initialized) await RenderRouteAsync();
     }
 
     private void RestoreFilter(GraphFilterState? saved)
     {
         if (saved is null) return;
+        saved.Upgrade();
         _filter.NodeTypes = NodeTypeStyles.RestoreVisibleTypes(saved);
         _filter.Subscriptions = saved.Subscriptions.ToList();
         _filter.ResourceGroups = saved.ResourceGroups.ToList();
@@ -112,6 +180,8 @@
         _filter.HideExternal = saved.HideExternal;
         _filter.HideEmulator = saved.HideEmulator;
         _filter.ShowLowConfidence = saved.ShowLowConfidence;
+        _filter.ShowChildResources = saved.ShowChildResources;
+        _filter.FilterVersion = saved.FilterVersion;
         _filter.TagName = saved.TagName is { Length: <= 512 } name ? name : null;
         _filter.TagValue = saved.TagValue is { Length: <= 256 } value ? value : null;
     }
@@ -123,13 +193,23 @@
         _facets = index is null ? null : GraphQueries.GetFacets(index);
         _selected = null;
         _selectedEdge = null;
+        _selectedEdges = [];
     }
 
     private async Task ApplyFilterAsync()
     {
-        if (_canvas is not null) await _canvas.ApplyFilterAsync(_filter);
+        if (_route is null && _session is not null && _view is not null && _view.Mode == GraphViewMode.Overview
+            && _filter.ShowChildResources != _overviewShowsChildren)
+        {
+            await LoadOverviewAsync(_session);
+        }
+        else
+        {
+            await ApplyFilterToCanvasAsync();
+        }
         await Preferences.UpdateAsync(p => p.GraphFilter = new GraphFilterState
         {
+            FilterVersion = GraphFilterState.CurrentFilterVersion,
             NodeTypes = _filter.NodeTypes.ToList(),
             KnownNodeTypes = NodeTypeStyles.All.Select(t => t.Type).ToList(),
             Subscriptions = _filter.Subscriptions.ToList(),
@@ -138,26 +218,105 @@
             HideExternal = _filter.HideExternal,
             HideEmulator = _filter.HideEmulator,
             ShowLowConfidence = _filter.ShowLowConfidence,
+            ShowChildResources = _filter.ShowChildResources,
             TagName = _filter.TagName,
             TagValue = _filter.TagValue
         });
     }
 
-    private async Task FindNodeAsync(string id)
+    private void NavigateToFocus(string id) => NavigateToRoute(new GraphFocusRoute(id, []));
+
+    private Task ExpandSelectedAsync(string id)
     {
-        if (_canvas is not null && await _canvas.FocusAsync(id)) OnNodeSelected(id);
+        if (_route is null) return Task.CompletedTask;
+        if (_route.Expand.Count >= GraphViewOptions.Value.MaxExpandInUrl)
+        {
+            Notifications.Notify(NotificationSeverity.Info, "Expansion limit reached",
+                $"A Focus link can include at most {GraphViewOptions.Value.MaxExpandInUrl} expanded resources.");
+            return Task.CompletedTask;
+        }
+        if (_view is null || _view.Nodes.Count >= GraphViewOptions.Value.FocusMaxNodes)
+        {
+            Notifications.Notify(NotificationSeverity.Info, "Focus limit reached",
+                $"Focus view is limited to {GraphViewOptions.Value.FocusMaxNodes} resources. Start a new focus from this resource instead.");
+            return Task.CompletedTask;
+        }
+        if (_route.Expand.Contains(id, StringComparer.OrdinalIgnoreCase)
+            || id.Equals(_route.Focus, StringComparison.OrdinalIgnoreCase)) return Task.CompletedTask;
+        NavigateToRoute(_route with { Expand = _route.Expand.Append(id).ToList() });
+        return Task.CompletedTask;
     }
 
-    private void OnNodeSelected(string? id)
+    private bool CanExpandSelected =>
+        _route is not null && _selected is not null
+        && !_selected.Id.Equals(_route.Focus, StringComparison.OrdinalIgnoreCase)
+        && !_route.Expand.Contains(_selected.Id, StringComparer.OrdinalIgnoreCase)
+        && _route.Expand.Count < GraphViewOptions.Value.MaxExpandInUrl
+        && (_view?.Nodes.Count ?? 0) < GraphViewOptions.Value.FocusMaxNodes;
+
+    private string? ExpandDisabledReason
     {
+        get
+        {
+            if (_route is null || _selected is null) return null;
+            if (_route.Expand.Contains(_selected.Id, StringComparer.OrdinalIgnoreCase))
+                return "This resource is already expanded.";
+            if (_route.Expand.Count >= GraphViewOptions.Value.MaxExpandInUrl)
+                return $"A Focus link can include at most {GraphViewOptions.Value.MaxExpandInUrl} expanded resources.";
+            if ((_view?.Nodes.Count ?? 0) >= GraphViewOptions.Value.FocusMaxNodes)
+                return $"Focus view is limited to {GraphViewOptions.Value.FocusMaxNodes} resources. Start a new focus from this resource instead.";
+            return null;
+        }
+    }
+
+    private void NavigateToRoute(GraphFocusRoute? route, bool replace = false)
+    {
+        var parameters = new Dictionary<string, object?>
+        {
+            ["focus"] = route?.Focus,
+            ["expand"] = route?.Expand.ToArray()
+        };
+        Nav.NavigateTo(Nav.GetUriWithQueryParameters(parameters), replace: replace);
+    }
+
+    private Task NavigateToBreadcrumbAsync(int expandedCount)
+    {
+        if (expandedCount < 0)
+        {
+            NavigateToRoute(null);
+            return Task.CompletedTask;
+        }
+        if (_route is null) return Task.CompletedTask;
+        NavigateToRoute(_route with { Expand = _route.Expand.Take(expandedCount).ToList() });
+        return Task.CompletedTask;
+    }
+
+    private void OnNodeSelected(int? nodeIndex)
+    {
+        var id = nodeIndex is { } i && _view is not null && i >= 0 && i < _view.NodeIds.Count
+            ? _view.NodeIds[i]
+            : null;
         _selected = id is not null && _index?.NodesById.TryGetValue(id, out var node) == true ? node : null;
-        if (_selected is not null) _selectedEdge = null;
+        _selectedEdge = null;
     }
 
-    private void OnEdgeSelected(string? id)
+    private void OnEdgeSelected(int? edgeIndex)
     {
-        _selectedEdge = id is null ? null : _graph?.Edges.FirstOrDefault(e => e.Id == id);
-        if (_selectedEdge is not null) _selected = null;
+        var edgeIds = edgeIndex is { } i && _view is not null && i >= 0 && i < _view.EdgeSources.Count
+            ? _view.EdgeSources[i]
+            : [];
+        var edgesById = edgeIds.Count == 0 ? null : _graph?.Edges.ToDictionary(e => e.Id, StringComparer.Ordinal);
+        _selectedEdges = edgesById is null
+            ? []
+            : edgeIds.Select(id => edgesById.GetValueOrDefault(id)).OfType<GraphEdge>().ToList();
+        _selectedEdge = _selectedEdges.FirstOrDefault();
+        _selected = null;
+    }
+
+    private Task OpenDetailsByIndexAsync(int index)
+    {
+        var id = _view is not null && index >= 0 && index < _view.NodeIds.Count ? _view.NodeIds[index] : null;
+        return id is null ? Task.CompletedTask : OpenDetailsAsync(id);
     }
 
     private Task OpenDetailsAsync(string id) =>
@@ -170,10 +329,7 @@
         if (sessionKey != _sessionKey) return;
         _ = InvokeAsync(async () =>
         {
-            if (_canvas is not null && _index?.NodesById.TryGetValue(resourceId, out var node) == true)
-            {
-                await _canvas.UpdateNodeTagsAsync(node.Id, node.GetTags());
-            }
+            if (_canvas is not null) await ApplyFilterToCanvasAsync();
             StateHasChanged();
         });
     }
@@ -182,12 +338,8 @@
 
     private async Task OnRenderedAsync()
     {
+        await ApplyFilterToCanvasAsync();
         if (_showChanges) await ApplyChangeHighlightAsync();
-        if (_pendingFocus is { } focus)
-        {
-            _pendingFocus = null;
-            await FindNodeAsync(focus);
-        }
     }
 
     private async Task ToggleChangesAsync()
@@ -196,11 +348,35 @@
         await ApplyChangeHighlightAsync();
     }
 
-    private Task ApplyChangeHighlightAsync() =>
-        _canvas is null ? Task.CompletedTask
-            : _showChanges && _changes is not null
-                ? _canvas.HighlightChangesAsync(_changes.AddedIds, _changes.ChangedIds)
-                : _canvas.HighlightChangesAsync([], []);
+    private Task ApplyChangeHighlightAsync()
+    {
+        if (_canvas is null || _view is null) return Task.CompletedTask;
+        var added = _showChanges && _changes is not null
+            ? IndicesFor(_changes.AddedIds)
+            : [];
+        var changed = _showChanges && _changes is not null
+            ? IndicesFor(_changes.ChangedIds)
+            : [];
+        return _canvas.HighlightChangesAsync(added, changed);
+    }
+
+    private IReadOnlyList<int> IndicesFor(IEnumerable<string> ids)
+    {
+        if (_view is null) return [];
+        var wanted = ids.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return _view.NodeIds.Select((id, index) => (id, index))
+            .Where(item => wanted.Contains(item.id))
+            .Select(item => item.index)
+            .ToList();
+    }
+
+    private Task ApplyFilterToCanvasAsync()
+    {
+        IReadOnlyList<int>? tagMatches = null;
+        if (_view is not null && _index is not null && !string.IsNullOrWhiteSpace(_filter.TagName))
+            tagMatches = GraphViews.MatchTag(_view, _index, _filter.TagName, _filter.TagValue);
+        return _canvas is null ? Task.CompletedTask : _canvas.ApplyFilterAsync(_filter, tagMatches);
+    }
 
     private async Task ExportJsonAsync()
     {
@@ -214,6 +390,142 @@
     {
         var graph = await Orchestrator.RebuildGraphAsync();
         var session = Store.Get(await UserContext.GetUserAsync());
-        if (graph is not null) Load(graph, session?.Index);
+        if (graph is not null)
+        {
+            _session = session;
+            _snapshot = session?.Snapshot;
+            _source = session?.Source;
+            await RenderRouteAsync(force: true);
+        }
+    }
+
+    private async Task RenderRouteAsync(bool force = false)
+    {
+        if (!_initialized && !force) return;
+        var requested = GraphFocusRoute.Parse(Focus, Expand, GraphViewOptions.Value.MaxExpandInUrl, out var droppedExpand);
+        if (!force && _routeRendered && Equals(requested, _route)) return;
+
+        _route = null;
+        _dependencies = [];
+        Load(_session?.Graph, _session?.Index);
+        _view = null;
+        if (_session?.Index is not { } index || _session.Graph is null)
+        {
+            _routeRendered = true;
+            return;
+        }
+
+        if (requested is null)
+        {
+            if (droppedExpand > 0)
+                Notifications.Notify(NotificationSeverity.Info, "Expanded resources ignored", $"{droppedExpand} expanded resource(s) were ignored.");
+            await LoadOverviewAsync(_session);
+            _routeRendered = true;
+            if (Focus is not null || (Expand?.Length ?? 0) > 0) NavigateToRoute(null, replace: true);
+            return;
+        }
+
+        if (!index.NodesById.TryGetValue(requested.Focus, out var focusNode))
+        {
+            Notifications.Notify(NotificationSeverity.Info, "Resource not in scan", "This resource is not in your current scan.");
+            await LoadOverviewAsync(_session);
+            _routeRendered = true;
+            NavigateToRoute(null, replace: true);
+            return;
+        }
+
+        if (focusNode.Type is nameof(AzureResourceKind.Tenant) or nameof(AzureResourceKind.Subscription) or nameof(AzureResourceKind.ResourceGroup))
+        {
+            ApplyScopeFocus(focusNode);
+            await LoadOverviewAsync(_session);
+            _routeRendered = true;
+            NavigateToRoute(null, replace: true);
+            return;
+        }
+
+        var acceptedExpansions = new List<string>();
+        var droppedUnknown = droppedExpand;
+        var view = GraphViews.BuildFocus(index, requested.Focus, acceptedExpansions,
+            _filter.HideEmulator, _filter.ShowLowConfidence);
+        foreach (var id in requested.Expand)
+        {
+            if (!index.NodesById.ContainsKey(id) || view is null || !view.NodeIds.Contains(id, StringComparer.OrdinalIgnoreCase))
+            {
+                droppedUnknown++;
+                continue;
+            }
+            var candidate = GraphViews.BuildFocus(index, requested.Focus, acceptedExpansions.Append(id).ToList(),
+                _filter.HideEmulator, _filter.ShowLowConfidence);
+            if (candidate is null || !ExpansionAddsContent(view, candidate))
+            {
+                droppedUnknown++;
+                continue;
+            }
+            acceptedExpansions.Add(id);
+            view = candidate;
+        }
+
+        _route = new GraphFocusRoute(requested.Focus, acceptedExpansions);
+        _view = view;
+        _dependencies = GraphViews.SummarizeDependencies(index, requested.Focus);
+        _routeRendered = true;
+        if (droppedUnknown > 0)
+        {
+            Notifications.Notify(NotificationSeverity.Info, "Expanded resources ignored", $"{droppedUnknown} expanded resource(s) were not in this Focus view.");
+            NavigateToRoute(_route, replace: true);
+        }
+    }
+
+    private static bool ExpansionAddsContent(GraphViewPayload previous, GraphViewPayload candidate)
+    {
+        if (candidate.NodeIds.Count > previous.NodeIds.Count) return true;
+        var previousEdges = previous.EdgeSources.SelectMany(sources => sources).ToHashSet(StringComparer.Ordinal);
+        return candidate.EdgeSources.SelectMany(sources => sources).Any(id => !previousEdges.Contains(id));
+    }
+
+    private void ApplyScopeFocus(GraphNode node)
+    {
+        if (node.Type == nameof(AzureResourceKind.Subscription)
+            && node.Data.GetValueOrDefault("subscriptionId")?.ToString() is { Length: > 0 } subscription)
+            _filter.Subscriptions = [subscription];
+        else if (node.Type == nameof(AzureResourceKind.ResourceGroup)
+                 && node.Data.GetValueOrDefault("resourceGroup")?.ToString() is { Length: > 0 } resourceGroup)
+        {
+            _filter.Subscriptions = [];
+            _filter.ResourceGroups = [resourceGroup];
+        }
+        else if (node.Type == nameof(AzureResourceKind.Tenant))
+        {
+            _filter.Subscriptions = [];
+            _filter.ResourceGroups = [];
+        }
+    }
+
+    private async Task LoadOverviewAsync(InventorySession session)
+    {
+        if (session.Index is not { } index || session.Graph is null) return;
+        var layout = await GraphLayouts.GetOverviewLayoutAsync(session, _filter.ShowChildResources, CancellationToken.None);
+        _view = GraphViews.BuildOverview(index, layout, _filter.ShowChildResources);
+        _overviewShowsChildren = _filter.ShowChildResources;
+        _selected = null;
+        _selectedEdge = null;
+        _selectedEdges = [];
+    }
+
+    private async Task CopyLinkAsync()
+    {
+        var uri = Nav.Uri;
+        try
+        {
+            if (_canvas is not null && await _canvas.CopyTextAsync(uri))
+            {
+                Notifications.Notify(NotificationSeverity.Success, "Link copied", "The Focus link was copied to the clipboard.");
+                return;
+            }
+        }
+        catch (JSException)
+        {
+        }
+        _copyUrl = uri;
     }
 }

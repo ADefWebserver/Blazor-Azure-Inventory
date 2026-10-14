@@ -14,6 +14,16 @@ public static class GraphJson
     };
 }
 
+/// <summary>Serializer for <see cref="GraphViewPayload"/>. Separate from <see cref="GraphJson"/> so Export JSON is unaffected.</summary>
+public static class GraphViewJson
+{
+    public static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        Converters = { new JsonStringEnumConverter() }
+    };
+}
+
 /// <summary>Read-only queries over a session's <see cref="GraphIndex"/>.</summary>
 public sealed class GraphQueryService
 {

@@ -109,6 +109,18 @@ public sealed class GraphSessionOptions
     [Range(1, 100000)] public int MaxSessions { get; set; } = 500;
 }
 
+public sealed class GraphViewOptions
+{
+    /// <summary>Kill switch for Cytoscape WebGL mode. False forces the canvas renderer.</summary>
+    public bool UseWebGl { get; set; } = true;
+    [Range(1, 60)] public int LayoutTimeoutSeconds { get; set; } = 10;
+    [Range(100, 20000)] public int OverviewMaxNodes { get; set; } = 3000;
+    [Range(5, 500)] public int FocusMaxNeighbours { get; set; } = 60;
+    [Range(20, 2000)] public int FocusMaxNodes { get; set; } = 250;
+    [Range(0, 50000)] public int HoverHighlightMaxElements { get; set; } = 4000;
+    [Range(0, 100)] public int MaxExpandInUrl { get; set; } = 20;
+}
+
 public sealed class SecurityOptions
 {
     public string[] AllowedTenantIds { get; set; } = [];
