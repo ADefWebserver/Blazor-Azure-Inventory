@@ -1,4 +1,4 @@
-# BlazorAzureInventorySolution
+# Blazor Azure Inventory
 
 **Azure Inventory** is a .NET 10 Blazor Server app (Radzen UI) that signs users in with Microsoft Entra ID, inventories the Azure resources *they* can see, analyzes Web App, Function App, and Container App configuration to detect connections, builds an in-memory knowledge graph, visualizes it with vis-network, and answers questions through an AI chat backed by graph tools and a self-hosted, read-only Azure MCP Server.
 
