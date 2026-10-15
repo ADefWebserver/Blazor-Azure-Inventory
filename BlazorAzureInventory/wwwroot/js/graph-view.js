@@ -1,421 +1,559 @@
-// Knowledge graph renderer (vis-network). Graph data is tenant-controlled: tooltips are built with
-// textContent and innerHTML is never used with graph data.
-import { Network, DataSet } from '../lib/vis-network/standalone/esm/vis-network.min.js';
+import cytoscape from '../lib/cytoscape/dist/cytoscape.esm.min.mjs';
+import { iconFor, legendEntries, loadIcons } from './graph-icons.js';
 
-// vis-network sizes 'database' shapes as a square around the label, so long names produce huge cylinders.
-// A fixed-size SVG cylinder with the label underneath keeps database nodes compact.
-function cylinder(fill, top) {
-    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='56' viewBox='0 0 48 56'>`
-        + `<path d='M4 10 V46 A20 8 0 0 0 44 46 V10 Z' fill='${fill}'/>`
-        + `<path d='M4 24 A20 8 0 0 0 44 24 M4 36 A20 8 0 0 0 44 36' fill='none' stroke='#ffffff' stroke-opacity='0.35' stroke-width='1.5'/>`
-        + `<ellipse cx='24' cy='10' rx='20' ry='8' fill='${top}' stroke='${fill}' stroke-width='1.5'/></svg>`;
-    return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
-}
-
-const NODE_STYLES = {
-    WebApp: { shape: 'box', color: '#0078D4' },
-    FunctionApp: { shape: 'box', color: '#F2A900' },
-    WebAppSlot: { shape: 'box', color: '#69AFE5', size: 'small' },
-    ContainerApp: { shape: 'hexagon', color: '#008575' },
-    ContainerRegistry: { shape: 'diamond', color: '#004E46' },
-    SqlServer: { shape: 'image', color: '#2E7D32', image: cylinder('#2E7D32', '#4CAF50') },
-    SqlDatabase: { shape: 'image', color: '#66BB6A', size: 'small', image: cylinder('#66BB6A', '#A5D6A7') },
-    StorageAccount: { shape: 'ellipse', color: '#7B1FA2' },
-    BlobContainer: { shape: 'dot', color: '#CE93D8' },
-    StorageQueue: { shape: 'square', color: '#AB47BC', size: 'small' },
-    CosmosAccount: { shape: 'ellipse', color: '#5C6BC0' },
-    RedisCache: { shape: 'ellipse', color: '#D32F2F' },
-    ServiceBusNamespace: { shape: 'ellipse', color: '#455A64' },
-    KeyVault: { shape: 'triangle', color: '#C8A400' },
-    ExternalService: { shape: 'box', color: '#607D8B', size: 'large' },
-    External: { shape: 'ellipse', color: '#9E9E9E', dashed: true },
-    Tenant: { shape: 'box', color: '#BDBDBD', outline: true },
-    Subscription: { shape: 'box', color: '#BDBDBD', outline: true },
-    ResourceGroup: { shape: 'box', color: '#BDBDBD', outline: true }
+const TYPE_COLORS = {
+    WebApp: '#0078D4',
+    FunctionApp: '#F2A900',
+    WebAppSlot: '#69AFE5',
+    ContainerApp: '#008575',
+    ContainerRegistry: '#004E46',
+    SqlServer: '#2E7D32',
+    SqlDatabase: '#66BB6A',
+    StorageAccount: '#7B1FA2',
+    BlobContainer: '#CE93D8',
+    StorageQueue: '#AB47BC',
+    CosmosAccount: '#5C6BC0',
+    RedisCache: '#D32F2F',
+    ServiceBusNamespace: '#455A64',
+    KeyVault: '#C8A400',
+    ExternalService: '#607D8B',
+    External: '#9E9E9E'
 };
-
-const LABEL_INSIDE = new Set(['box', 'ellipse', 'database', 'circle', 'text']);
-const STRUCTURAL = new Set(['CONTAINS', 'HAS_SLOT', 'HOSTS_DATABASE', 'HAS_CONTAINER', 'HAS_QUEUE']);
-const HEX_COLOR = /^#[0-9A-Fa-f]{6}$/;
-// Node types that have no properties popup.
-const NO_DETAILS = new Set(['Tenant']);
-const INFO_ICON_RADIUS = 8;
-const INFO_ICON_MIN_SCALE = 0.35;
+const EDGE_COLORS = {
+    CONNECTS_TO: '#0078D4',
+    REFERENCES_SECRET: '#C8A400',
+    PULLS_IMAGE_FROM: '#008575'
+};
 const MAX_LABEL_LENGTH = 28;
-// Drop shadows are costly to redraw, so only use them on smaller graphs.
-const SHADOW_NODE_LIMIT = 500;
-const FONT_FACE = "'Segoe UI', system-ui, -apple-system, Arial, sans-serif";
+const HEX_COLOR = /^#[0-9a-f]{6}$/i;
 
-let network = null;
+let cy = null;
 let container = null;
-let nodes = null;
-let edges = null;
 let dotNet = null;
-let rawNodes = [];
-let rawEdges = [];
+let payload = null;
 let lastFilter = null;
+let tagMatches = null;
+let selectedNode = null;
+let highlighted = null;
+let faded = null;
+let hoverMax = 4000;
+let logTimings = false;
+let legendId = null;
 
-export function init(containerId, dotNetRef) {
-    dotNet = dotNetRef;
+export function init(containerId, dotNetRef, options) {
     container = document.getElementById(containerId);
-    nodes = new DataSet([]);
-    edges = new DataSet([]);
-    network = new Network(container, { nodes, edges }, baseOptions(false));
-    network.on('afterDrawing', drawInfoIcons);
-    network.on('click', e => {
-        const id = infoIconAt(e.pointer.canvas);
-        if (id) dotNet?.invokeMethodAsync('OnNodeOpen', id);
-    });
-    container.addEventListener('mousemove', onMouseMove);
-    network.on('selectNode', e => {
-        const id = e.nodes[0];
-        highlight(id);
-        dotNet?.invokeMethodAsync('OnNodeSelected', id);
-    });
-    network.on('deselectNode', () => {
-        highlight(null);
-        dotNet?.invokeMethodAsync('OnNodeSelected', null);
-    });
-    network.on('doubleClick', e => {
-        if (e.nodes.length > 0) dotNet?.invokeMethodAsync('OnNodeOpen', e.nodes[0]);
-    });
-    network.on('selectEdge', e => {
-        // Clicking a node also selects its edges; only report direct edge clicks.
-        if (e.nodes.length === 0 && e.edges.length > 0) dotNet?.invokeMethodAsync('OnEdgeSelected', e.edges[0]);
-    });
-    network.on('deselectEdge', e => {
-        if ((e.nodes ?? []).length === 0) dotNet?.invokeMethodAsync('OnEdgeSelected', null);
-    });
-}
+    dotNet = dotNetRef;
+    hoverMax = Number.isInteger(options?.hoverMax) ? options.hoverMax : hoverMax;
+    logTimings = options?.timings === true;
+    legendId = typeof options?.legendId === 'string' ? options.legendId : null;
 
-// Keeps the client copy of a node's tags in sync after a tag write, so the tag filter stays accurate.
-export function updateNodeTags(id, tags) {
-    const node = rawNodes.find(n => n.id === id);
-    if (!node) return;
-    node.data = { ...(node.data ?? {}), tags: tags ?? {} };
-    if (lastFilter) applyFilter(lastFilter);
-}
+    const wantsWebGl = options?.webgl === true;
+    let usedWebGl = wantsWebGl;
+    try {
+        if (wantsWebGl && !webGlAvailable()) usedWebGl = false;
+        cy = createCytoscape(usedWebGl);
+    } catch (error) {
+        if (!wantsWebGl || !usedWebGl) throw error;
+        usedWebGl = false;
+        cy = createCytoscape(false);
+    }
+    if (wantsWebGl && !usedWebGl) dotNet?.invokeMethodAsync('OnWebGlFallback');
 
-// Outlines nodes added (green) or changed (orange) since the previous scan; empty lists restore the normal style.
-export function highlightChanges(addedIds, changedIds) {
-    const added = new Set((addedIds ?? []).map(id => id.toLowerCase()));
-    const changed = new Set((changedIds ?? []).map(id => id.toLowerCase()));
-    const shadow = rawNodes.length <= SHADOW_NODE_LIMIT;
-    nodes.update(rawNodes.map(n => {
-        const node = toVisNode(n, shadow);
-        const key = String(n.id).toLowerCase();
-        const border = added.has(key) ? '#16a34a' : changed.has(key) ? '#ea580c' : null;
-        if (border) {
-            node.borderWidth = 4;
-            node.color = { ...node.color, border };
+    cy.on('tap', 'node', event => {
+        const node = event.target;
+        selectedNode = node.id();
+        highlightNeighbourhood(node);
+        dotNet?.invokeMethodAsync('OnNodeSelected', node.data('index'));
+    });
+    cy.on('dbltap', 'node', event => {
+        dotNet?.invokeMethodAsync('OnNodeOpen', event.target.data('index'));
+    });
+    cy.on('tap', 'edge', event => {
+        dotNet?.invokeMethodAsync('OnEdgeSelected', event.target.data('index'));
+    });
+    cy.on('tap', event => {
+        if (event.target === cy) {
+            selectedNode = null;
+            clearHighlight();
+            dotNet?.invokeMethodAsync('OnNodeSelected', null);
+            dotNet?.invokeMethodAsync('OnEdgeSelected', null);
         }
-        return node;
-    }));
+    });
+    cy.on('mouseover', 'node', event => {
+        if (cy.elements(':visible').length > hoverMax) return;
+        highlightNeighbourhood(event.target);
+    });
+    cy.on('mouseout', 'node', () => {
+        if (selectedNode && cy.getElementById(selectedNode).length) highlightNeighbourhood(cy.getElementById(selectedNode));
+        else clearHighlight();
+    });
 }
 
-function matchesTag(n, tagName, tagValue) {
-    const tags = n.data?.tags;
-    if (!tags) return false;
-    const wanted = tagName.toLowerCase();
-    const overflow = new RegExp('^' + wanted.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '-\\d+$');
-    const value = (tagValue ?? '').toLowerCase();
-    for (const [k, v] of Object.entries(tags)) {
-        const key = k.toLowerCase();
-        if (key !== wanted && !overflow.test(key)) continue;
-        if (!value || String(v).toLowerCase().includes(value)) return true;
-    }
-    return false;
-}
-
-export async function renderFromStream(streamRef) {
+export async function render(streamRef) {
+    const start = performance.now();
     const buffer = await streamRef.arrayBuffer();
-    const graph = JSON.parse(new TextDecoder().decode(buffer));
-    rawNodes = graph.nodes ?? [];
-    rawEdges = graph.edges ?? [];
-    const large = rawNodes.length > 1500;
-    const shadow = rawNodes.length <= SHADOW_NODE_LIMIT;
+    const transferEnd = performance.now();
+    const parsed = JSON.parse(new TextDecoder().decode(buffer));
+    const parseEnd = performance.now();
+    await loadIcons();
+    payload = parsed;
+    buildLegend(parsed);
+    selectedNode = null;
+    highlighted = cy.collection();
+    faded = cy.collection();
 
-    network.setOptions(baseOptions(large));
-    nodes.clear();
-    edges.clear();
-    nodes.add(rawNodes.map(n => toVisNode(n, shadow)));
-    edges.add(rawEdges.map(toVisEdge));
-    if (lastFilter) applyFilter(lastFilter);
+    const elements = toElements(parsed);
+    cy.batch(() => {
+        cy.elements().remove();
+        cy.add(elements);
+    });
+    if (lastFilter) applyFilter(lastFilter, tagMatches);
 
-    // Physics is frozen once the initial layout settles; the user can resume it from the toolbar.
-    const done = () => {
-        network.setOptions({ physics: { enabled: false } });
-        network.fit({ animation: false });
-        dotNet?.invokeMethodAsync('OnRenderComplete', rawNodes.length, rawEdges.length);
-    };
-    if (rawNodes.length === 0) {
-        done();
-    } else {
-        network.once('stabilizationIterationsDone', done);
-        network.stabilize(large ? 200 : 400);
+    if (parsed.nodes.length === 0) {
+        dotNet?.invokeMethodAsync('OnRenderComplete', 0, 0, performance.now() - start);
+        return;
     }
+
+    if (parsed.mode === 'Focus') {
+        const positions = focusPositions(parsed);
+        cy.batch(() => {
+            cy.nodes().forEach(node => {
+                const position = positions[node.data('index')];
+                if (position && !node.isParent()) node.position(position);
+            });
+        });
+    }
+    else {
+        const layout = cy.layout({ name: 'preset', fit: false });
+        await new Promise(resolve => {
+            layout.one('layoutstop', resolve);
+            layout.run();
+        });
+    }
+    const layoutEnd = performance.now();
+    cy.fit(cy.elements(':visible'), 40);
+    if (logTimings) {
+        console.info(`[graph] ${parsed.nodes.length} nodes, ${parsed.edges.length} edges, ${buffer.byteLength} bytes: `
+            + `transfer ${ms(transferEnd - start)}, parse ${ms(parseEnd - transferEnd)}, `
+            + `add ${ms(layoutEnd - parseEnd)}, layout ${ms(performance.now() - layoutEnd)}, `
+            + `total ${ms(performance.now() - start)}`);
+    }
+    dotNet?.invokeMethodAsync('OnRenderComplete', parsed.nodes.length, parsed.edges.length, performance.now() - start);
 }
 
-export function applyFilter(filter) {
+export function applyFilter(filter, matchingTagIndexes = null) {
     lastFilter = filter;
-    if (!nodes) return;
+    tagMatches = matchingTagIndexes;
+    if (!cy || !payload) return;
+    const start = performance.now();
     const types = new Set(filter.nodeTypes ?? []);
-    const subs = new Set((filter.subscriptions ?? []).map(s => s.toLowerCase()));
-    const groups = new Set((filter.resourceGroups ?? []).map(g => g.toLowerCase()));
-    const tagName = (filter.tagName ?? '').trim();
-
+    const subscriptions = new Set((filter.subscriptions ?? []).map(value => value.toLowerCase()));
+    const groups = new Set((filter.resourceGroups ?? []).map(value => value.toLowerCase()));
+    const matchingTags = matchingTagIndexes === null ? null : new Set(matchingTagIndexes);
+    const hasTagFilter = String(filter.tagName ?? '').trim().length > 0;
     const visible = new Set();
-    for (const n of rawNodes) {
-        const d = n.data ?? {};
-        let show = types.has(n.type);
-        if (show && subs.size > 0 && d.subscriptionId) show = subs.has(String(d.subscriptionId).toLowerCase());
-        if (show && groups.size > 0 && d.resourceGroup) show = groups.has(String(d.resourceGroup).toLowerCase());
-        if (show && filter.hideExternal && n.type === 'External') show = false;
-        if (show && filter.hideEmulator && d.isLocalEmulator === true) show = false;
-        if (show && tagName) show = matchesTag(n, tagName, filter.tagValue);
-        if (show) visible.add(n.id);
+
+    for (let i = 0; i < payload.nodes.length; i++) {
+        const node = payload.nodes[i];
+        let show = true;
+        if (payload.mode !== 'Focus') {
+            show = types.has(node.t);
+            if (show && subscriptions.size && node.s != null)
+                show = subscriptions.has(String(payload.subs[node.s]).toLowerCase());
+            if (show && groups.size && node.g != null)
+                show = groups.has(String(payload.rgs[node.g]).toLowerCase());
+            if (show && filter.hideExternal && node.t === 'External') show = false;
+            if (show && filter.hideEmulator && node.emu === true) show = false;
+            if (show && hasTagFilter) show = matchingTags?.has(i) === true;
+        }
+        if (show) visible.add(i);
     }
 
     const visibleEdges = new Set();
-    for (const e of rawEdges) {
-        let show = visible.has(e.source) && visible.has(e.target);
-        if (show && !filter.showLowConfidence && e.data?.confidence === 'Low') show = false;
-        if (show) visibleEdges.add(e.id);
+    for (let i = 0; i < payload.edges.length; i++) {
+        const edge = payload.edges[i];
+        let show = visible.has(edge.s) && visible.has(edge.t);
+        if (show && !filter.showLowConfidence && edge.lo === true) show = false;
+        if (show) visibleEdges.add(i);
     }
 
-    if (filter.onlyConnected) {
+    if (payload.mode !== 'Focus' && filter.onlyConnected) {
         const connected = new Set();
-        for (const e of rawEdges) {
-            if (visibleEdges.has(e.id) && !STRUCTURAL.has(e.type)) {
-                connected.add(e.source);
-                connected.add(e.target);
+        for (let i = 0; i < payload.edges.length; i++) {
+            const edge = payload.edges[i];
+            if (visibleEdges.has(i)) {
+                connected.add(edge.s);
+                connected.add(edge.t);
             }
         }
-        for (const id of [...visible]) if (!connected.has(id)) visible.delete(id);
-        for (const e of rawEdges) if (!visible.has(e.source) || !visible.has(e.target)) visibleEdges.delete(e.id);
+        for (const index of visible) if (!connected.has(index)) visible.delete(index);
+        for (let i = 0; i < payload.edges.length; i++) {
+            const edge = payload.edges[i];
+            if (!visible.has(edge.s) || !visible.has(edge.t)) visibleEdges.delete(i);
+        }
     }
 
-    nodes.update(rawNodes.map(n => ({ id: n.id, hidden: !visible.has(n.id) })));
-    edges.update(rawEdges.map(e => ({ id: e.id, hidden: !visibleEdges.has(e.id) })));
+    cy.batch(() => {
+        cy.nodes().forEach(node => node.toggleClass('off', !visible.has(node.data('index'))));
+        cy.edges().forEach(edge => edge.toggleClass('off', !visibleEdges.has(edge.data('index'))));
+    });
+    dotNet?.invokeMethodAsync('OnVisibleCounts', visible.size, visibleEdges.size);
+    const elapsed = performance.now() - start;
+    if (logTimings) console.info(`[graph] applyFilter ${visible.size}/${payload.nodes.length} nodes visible in ${ms(elapsed)}`);
 }
 
-export function focusNode(id) {
-    if (!network || !nodes.get(id)) return false;
-    nodes.update({ id, hidden: false });
-    network.selectNodes([id]);
-    network.focus(id, { scale: 1.2, animation: { duration: 600, easingFunction: 'easeInOutQuad' } });
-    highlight(id);
+export function center(index) {
+    const node = cy?.getElementById(nodeId(index));
+    if (!node?.length) return false;
+    node.removeClass('off');
+    selectedNode = node.id();
+    node.select();
+    highlightNeighbourhood(node);
+    cy.animate({ center: { eles: node }, zoom: Math.max(cy.zoom(), 1.1), duration: 350 });
+    dotNet?.invokeMethodAsync('OnNodeSelected', index);
     return true;
 }
 
-export function fit() {
-    network?.fit({ animation: { duration: 400 } });
+export function highlightChanges(addedIndexes, changedIndexes) {
+    if (!cy) return;
+    const added = new Set(addedIndexes ?? []);
+    const changed = new Set(changedIndexes ?? []);
+    cy.batch(() => cy.nodes().forEach(node => {
+        const index = node.data('index');
+        node.toggleClass('added', added.has(index));
+        node.toggleClass('changed', !added.has(index) && changed.has(index));
+    }));
 }
 
-export function setPhysics(enabled) {
-    network?.setOptions({ physics: { enabled } });
+export function fit() {
+    if (cy) cy.animate({ fit: { eles: cy.elements(':visible'), padding: 40 }, duration: 300 });
+}
+
+export function copyText(text) {
+    return navigator.clipboard?.writeText(text).then(() => true, () => false) ?? Promise.resolve(false);
 }
 
 export function dispose() {
-    container?.removeEventListener('mousemove', onMouseMove);
+    cy?.destroy();
+    cy = null;
     container = null;
-    network?.destroy();
-    network = null;
-    nodes = null;
-    edges = null;
     dotNet = null;
-    rawNodes = [];
-    rawEdges = [];
+    payload = null;
+    lastFilter = null;
+    tagMatches = null;
+    selectedNode = null;
+    highlighted = null;
+    faded = null;
 }
 
-function baseOptions(large) {
-    return {
-        autoResize: true,
-        layout: { improvedLayout: !large },
-        interaction: { hover: true, tooltipDelay: 200, navigationButtons: false },
-        physics: {
-            enabled: true,
-            solver: 'barnesHut',
-            barnesHut: { gravitationalConstant: -9000, centralGravity: 0.25, springLength: 170, springConstant: 0.03, avoidOverlap: 0.6 },
-            stabilization: { iterations: large ? 200 : 400 }
+function createCytoscape(webgl) {
+    return cytoscape({
+        container,
+        renderer: { name: 'canvas', webgl },
+        textureOnViewport: false,
+        hideEdgesOnViewport: !webgl,
+        pixelRatio: 'auto',
+        minZoom: 0.05,
+        maxZoom: 3,
+        wheelSensitivity: 0.2,
+        style: buildStyle()
+    });
+}
+
+function buildLegend(view) {
+    const list = legendId ? document.getElementById(legendId) : null;
+    if (!list) return;
+    const present = new Set(view.nodes.map(node => node.t));
+    list.replaceChildren(...legendEntries()
+        .filter(entry => present.has(entry.type))
+        .map(entry => {
+            const item = document.createElement('li');
+            const badge = document.createElement('span');
+            badge.className = 'graph-legend-badge';
+            badge.style.background = TYPE_COLORS[entry.type] ?? '#9E9E9E';
+            if (entry.uri) {
+                const image = document.createElement('img');
+                image.src = entry.uri;
+                image.alt = '';
+                image.width = 12;
+                image.height = 12;
+                badge.append(image);
+            }
+            const label = document.createElement('span');
+            label.textContent = entry.label;
+            item.append(badge, label);
+            return item;
+        }));
+}
+
+function webGlAvailable() {
+    const probe = document.createElement('canvas');
+    const context = probe.getContext('webgl2') || probe.getContext('webgl');
+    if (!context) return false;
+    context.getExtension('WEBGL_lose_context')?.loseContext();
+    return true;
+}
+
+function buildStyle() {
+    return [
+        {
+            selector: 'node',
+            style: {
+                shape: 'ellipse',
+                width: 'data(size)',
+                height: 'data(size)',
+                'background-color': 'data(color)',
+                'background-image': 'data(icon)',
+                'background-fit': 'contain',
+                'background-width': '55%',
+                'background-height': '55%',
+                'background-clip': 'node',
+                'border-width': 1,
+                'border-color': '#ffffff',
+                label: 'data(label)',
+                color: '#1f2937',
+                'font-family': '"Segoe UI", system-ui, sans-serif',
+                'font-size': 11,
+                'font-weight': 500,
+                'text-valign': 'bottom',
+                'text-halign': 'center',
+                'text-margin-y': 8,
+                'text-wrap': 'ellipsis',
+                'text-max-width': 150,
+                'min-zoomed-font-size': 9,
+                'text-outline-width': 2,
+                'text-outline-color': 'rgba(255,255,255,0.9)'
+            }
         },
-        nodes: {
-            font: { face: FONT_FACE, size: 13 },
-            borderWidth: 1,
-            // Hide labels once they become too small to read when zoomed out.
-            scaling: { label: { drawThreshold: 7 } }
+        {
+            selector: 'node:parent',
+            style: {
+                shape: 'round-rectangle',
+                padding: 24,
+                'background-color': '#e2e8f0',
+                'background-opacity': 0.4,
+                'background-image': 'none',
+                'border-color': '#94a3b8',
+                'border-width': 1,
+                'text-valign': 'top',
+                'text-halign': 'center',
+                'text-margin-y': -6
+            }
         },
-        edges: {
-            smooth: large ? false : { type: 'continuous' },
-            selectionWidth: 1.5,
-            hoverWidth: 0.5,
-            font: { face: FONT_FACE, size: 9, color: '#4b5563', strokeWidth: 3, strokeColor: '#ffffff', align: 'middle' },
-            scaling: { label: { drawThreshold: 8 } }
+        {
+            selector: 'node:child',
+            style: { 'text-max-width': 120 }
+        },
+        {
+            selector: 'node[?aggregate]',
+            style: {
+                'background-color': '#64748b',
+                'border-style': 'dashed',
+                'font-size': 10
+            }
+        },
+        {
+            selector: 'edge',
+            style: {
+                width: 'data(width)',
+                'line-color': 'data(edgeColor)',
+                'target-arrow-color': 'data(edgeColor)',
+                'target-arrow-shape': 'triangle',
+                'arrow-scale': 0.8,
+                'curve-style': 'straight',
+                opacity: 'data(opacity)'
+            }
+        },
+        { selector: '.off', style: { display: 'none' } },
+        {
+            selector: '.faded',
+            style: { opacity: 0.12, 'text-opacity': 0.12 }
+        },
+        {
+            selector: '.hl',
+            style: { opacity: 1, 'text-opacity': 1, 'z-index': 10 }
+        },
+        {
+            selector: '.show-label',
+            style: { 'font-size': 12, 'min-zoomed-font-size': 0 }
+        },
+        { selector: '.added', style: { 'border-width': 4, 'border-color': '#16a34a' } },
+        { selector: '.changed', style: { 'border-width': 4, 'border-color': '#ea580c' } }
+    ];
+}
+
+// Focus layout: the focused node in the centre and every other top-level unit (a node, or a parent with its children
+// packed into a grid) on concentric rings sized so units and their labels never overlap. Children are positioned
+// relative to their parent; the parent's box then follows its children.
+function focusPositions(view) {
+    const FOCUS_SIZE = 72;
+    const NODE_SIZE = 40;
+    const CELL_W = 130;
+    const CELL_H = 70;
+    const PARENT_PADDING = 24;
+    const GAP = 40;
+    const positions = new Array(view.nodes.length);
+    const childrenOf = new Map();
+    view.nodes.forEach((node, index) => {
+        if (Number.isInteger(node.p) && node.p !== index) {
+            if (!childrenOf.has(node.p)) childrenOf.set(node.p, []);
+            childrenOf.get(node.p).push(index);
         }
-    };
-}
+    });
+    const isChild = index => Number.isInteger(view.nodes[index].p) && view.nodes[index].p !== index;
 
-function tooltip(label, type, hint) {
-    const el = document.createElement('div');
-    el.className = 'graph-tip';
-    const parts = [[label, 'graph-tip-title'], [type, 'graph-tip-type'], [hint, 'graph-tip-hint']];
-    for (const [text, cls] of parts) {
-        if (!text) continue;
-        const line = document.createElement('div');
-        line.className = cls;
-        line.textContent = text;
-        el.appendChild(line);
-    }
-    return el;
-}
-
-function shortLabel(label) {
-    const text = String(label ?? '');
-    return text.length > MAX_LABEL_LENGTH ? text.slice(0, MAX_LABEL_LENGTH - 1) + '\u2026' : text;
-}
-
-function toVisNode(n, shadow) {
-    const style = NODE_STYLES[n.type] ?? NODE_STYLES.External;
-    const inside = LABEL_INSIDE.has(style.shape);
-    const small = style.size === 'small';
-    const node = {
-        id: n.id,
-        label: shortLabel(n.label),
-        title: tooltip(n.label, n.type, NO_DETAILS.has(n.type) ? null : 'Click the (i) icon or double-click for properties'),
-        shape: style.shape,
-        color: style.outline
-            ? { background: '#ffffff', border: style.color, highlight: { background: '#f5f5f5', border: '#616161' }, hover: { background: '#fafafa', border: '#616161' } }
-            : { background: style.color, border: style.color, highlight: { background: style.color, border: '#1f2937' }, hover: { background: style.color, border: '#1f2937' } },
-        font: inside && !style.outline
-            ? { color: '#ffffff', size: small ? 11 : 13 }
-            // Labels drawn outside the shape get a halo so they stay readable over edges.
-            : { color: '#1f2937', size: small ? 11 : 12, strokeWidth: 3, strokeColor: 'rgba(255,255,255,0.9)' },
-        margin: small ? { top: 5, bottom: 5, left: 8, right: 8 } : { top: 8, bottom: 8, left: 12, right: 12 },
-        size: small ? 14 : 20,
-        borderWidth: style.outline ? 2 : 1,
-        borderWidthSelected: 3,
-        shapeProperties: { borderRadius: 6 },
-        shadow: shadow ? { enabled: true, color: 'rgba(15,23,42,0.18)', size: 6, x: 0, y: 2 } : false
-    };
-    if (style.image) node.image = style.image;
-    if (style.size === 'large') {
-        // Shared external services are hubs: bigger, heavier, and colored per service (validated hex only).
-        const color = HEX_COLOR.test(n.data?.color ?? '') ? n.data.color : style.color;
-        node.color = { background: color, border: color, highlight: { background: color, border: '#1f2937' }, hover: { background: color, border: '#1f2937' } };
-        node.label = n.data?.category ? `${shortLabel(n.label)}\n${shortLabel(n.data.category)}` : shortLabel(n.label);
-        node.font = { color: '#ffffff', size: 22 };
-        node.margin = { top: 16, bottom: 16, left: 22, right: 22 };
-        node.borderWidth = 3;
-        node.mass = 4;
-    }
-    if (style.dashed) {
-        node.color = { background: '#f3f4f6', border: style.color, highlight: { background: '#e5e7eb', border: '#4b5563' }, hover: { background: '#e5e7eb', border: '#4b5563' } };
-        node.font = { color: '#374151', size: 12 };
-        node.shapeProperties = { borderDashes: [5, 5], borderRadius: 6 };
-    }
-    return node;
-}
-
-function toVisEdge(e) {
-    const low = e.data?.confidence === 'Low';
-    const edge = { id: e.id, from: e.source, to: e.target, arrows: { to: { enabled: true, scaleFactor: 0.6 } } };
-    switch (e.type) {
-        case 'CONNECTS_TO':
-            Object.assign(edge, { color: { color: '#0078D4', highlight: '#005A9E', hover: '#005A9E', opacity: 0.7 }, width: 1.5, label: 'CONNECTS_TO' });
-            break;
-        case 'REFERENCES_SECRET':
-            Object.assign(edge, { color: { color: '#C8A400', highlight: '#8A7100', hover: '#8A7100', opacity: 0.8 }, width: 1.5, dashes: true, label: 'REFERENCES_SECRET' });
-            break;
-        case 'PULLS_IMAGE_FROM':
-            Object.assign(edge, { color: { color: '#008575', highlight: '#004E46', hover: '#004E46', opacity: 0.8 }, width: 1.5, dashes: [2, 4], label: 'PULLS_IMAGE_FROM' });
-            break;
-        default:
-            Object.assign(edge, { color: { color: '#CBD5E1', highlight: '#64748B', hover: '#94A3B8' }, width: 1 });
-    }
-    if (low) {
-        edge.dashes = true;
-        edge.color = { ...edge.color, opacity: 0.5 };
-    }
-    return edge;
-}
-
-// Canvas-space centre of the info icon for every visible node that has a properties popup.
-function infoIconPositions() {
-    if (!network || !nodes || network.getScale() < INFO_ICON_MIN_SCALE) return [];
-    const result = [];
-    for (const n of rawNodes) {
-        if (NO_DETAILS.has(n.type)) continue;
-        const vis = nodes.get(n.id);
-        if (!vis || vis.hidden) continue;
-        const style = NODE_STYLES[n.type] ?? NODE_STYLES.External;
-        let x, y;
-        if (LABEL_INSIDE.has(style.shape)) {
-            const box = network.getBoundingBox(n.id);
-            if (!box) continue;
-            x = box.right - 2;
-            y = box.top + 2;
-        } else {
-            // Bounding boxes of these shapes include the label below them, so anchor to the shape itself.
-            const pos = network.getPositions([n.id])[n.id];
-            if (!pos) continue;
-            const r = vis.size ?? 20;
-            x = pos.x + r * 0.85;
-            y = pos.y - r * 0.85;
+    const units = [];
+    for (let index = 0; index < view.nodes.length; index++) {
+        if (index === view.focus || isChild(index)) continue;
+        const children = childrenOf.get(index) ?? [];
+        let width = Math.max(NODE_SIZE, 110);
+        let height = NODE_SIZE + 30;
+        let columns = 0;
+        if (children.length) {
+            columns = Math.ceil(Math.sqrt(children.length));
+            width = columns * CELL_W + 2 * PARENT_PADDING;
+            height = Math.ceil(children.length / columns) * CELL_H + 2 * PARENT_PADDING + 20;
         }
-        result.push({ id: n.id, x, y, opacity: vis.opacity ?? 1 });
+        units.push({ index, children, columns, diameter: Math.hypot(width, height) * 0.8 + GAP });
     }
-    return result;
+
+    positions[view.focus] = { x: 0, y: 0 };
+    let centreRadius = FOCUS_SIZE / 2;
+    const focusChildren = childrenOf.get(view.focus) ?? [];
+    if (focusChildren.length) {
+        const columns = Math.ceil(Math.sqrt(focusChildren.length));
+        const rows = Math.ceil(focusChildren.length / columns);
+        focusChildren.forEach((child, i) => {
+            positions[child] = {
+                x: ((i % columns) - (columns - 1) / 2) * CELL_W,
+                y: (Math.floor(i / columns) - (rows - 1) / 2) * CELL_H + 10
+            };
+        });
+        centreRadius = Math.hypot(columns * CELL_W, rows * CELL_H) / 2 + PARENT_PADDING;
+    }
+    let radius = centreRadius + (units[0]?.diameter ?? 0) / 2 + 60;
+    let ring = 0;
+    for (let next = 0; next < units.length; ring++) {
+        const members = [];
+        let used = 0;
+        let thickness = 0;
+        while (next < units.length && (members.length === 0 || used + units[next].diameter <= 2 * Math.PI * radius)) {
+            members.push(units[next]);
+            used += units[next].diameter;
+            thickness = Math.max(thickness, units[next].diameter);
+            next++;
+        }
+        radius = Math.max(radius, used / (2 * Math.PI));
+        let angle = -Math.PI / 2 + ring * 0.6;
+        for (const unit of members) {
+            const share = (unit.diameter / used) * 2 * Math.PI;
+            const theta = angle + share / 2;
+            const x = radius * Math.cos(theta);
+            const y = radius * Math.sin(theta);
+            angle += share;
+            positions[unit.index] = { x, y };
+            unit.children.forEach((child, i) => {
+                const rows = Math.ceil(unit.children.length / unit.columns);
+                positions[child] = {
+                    x: x + ((i % unit.columns) - (unit.columns - 1) / 2) * CELL_W,
+                    y: y + (Math.floor(i / unit.columns) - (rows - 1) / 2) * CELL_H + 10
+                };
+            });
+        }
+        radius += thickness;
+    }
+    return positions;
 }
 
-function drawInfoIcons(ctx) {
-    const icons = infoIconPositions();
-    if (icons.length === 0) return;
-    ctx.save();
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font = `bold ${INFO_ICON_RADIUS * 1.4}px Georgia, 'Times New Roman', serif`;
-    for (const icon of icons) {
-        ctx.globalAlpha = icon.opacity;
-        ctx.beginPath();
-        ctx.arc(icon.x, icon.y, INFO_ICON_RADIUS, 0, Math.PI * 2);
-        ctx.fillStyle = '#ffffff';
-        ctx.fill();
-        ctx.lineWidth = 1.5;
-        ctx.strokeStyle = '#0078D4';
-        ctx.stroke();
-        ctx.fillStyle = '#0078D4';
-        ctx.fillText('i', icon.x, icon.y + 1);
-    }
-    ctx.restore();
+function toElements(view) {
+    const nodes = view.nodes.map((node, index) => {
+        const color = validColor(node.c) ? node.c : (TYPE_COLORS[node.t] ?? TYPE_COLORS.External);
+        const focus = view.mode === 'Focus';
+        const size = focus
+            ? (index === view.focus ? 72 : 40)
+            : node.t === 'ExternalService' ? 72 : Math.max(24, Math.min(64, 24 + 6 * Math.sqrt(node.d ?? 0)));
+        let label = node.l ?? '';
+        if (node.k) label += ` (+${node.k})`;
+        if (node.m) label += ` (+${node.m})`;
+        if (node.agg) label = label || '+ more';
+        return {
+            group: 'nodes',
+            data: {
+                id: nodeId(index),
+                index,
+                type: node.t,
+                label: shortLabel(label),
+                color,
+                size,
+                icon: iconFor(node.t, node.t === 'External' ? '#374151' : '#ffffff'),
+                category: node.cat,
+                aggregate: node.agg === true,
+                parent: Number.isInteger(node.p) && node.p !== index ? nodeId(node.p) : undefined
+            },
+            position: {
+                x: Number.isFinite(node.x) ? node.x : Math.cos(index * 2.39996) * 400,
+                y: Number.isFinite(node.y) ? node.y : Math.sin(index * 2.39996) * 400
+            }
+        };
+    });
+    const edges = view.edges.flatMap((edge, index) => {
+        // A parent box already shows containment; Cytoscape draws edges between a compound parent and its own child as loops.
+        if (view.nodes[edge.s]?.p === edge.t || view.nodes[edge.t]?.p === edge.s) return [];
+        return [{
+            group: 'edges',
+            data: {
+                id: `edge-${index}`,
+                index,
+                source: nodeId(edge.s),
+                target: nodeId(edge.t),
+                edgeColor: EDGE_COLORS[edge.y] ?? '#94a3b8',
+                width: view.mode === 'Focus'
+                    ? 2
+                    : Math.max(1, Math.min(4, 1 + Math.log2(Math.max(1, edge.n ?? 1)))),
+                opacity: edge.lo ? 0.35 : 0.85
+            }
+        }];
+    });
+    return [...nodes, ...edges];
 }
 
-function infoIconAt(point) {
-    if (!point) return null;
-    const hit = INFO_ICON_RADIUS + 2;
-    const icons = infoIconPositions();
-    // Topmost (last drawn) icon wins when icons overlap.
-    for (let i = icons.length - 1; i >= 0; i--) {
-        const dx = point.x - icons[i].x;
-        const dy = point.y - icons[i].y;
-        if (dx * dx + dy * dy <= hit * hit) return icons[i].id;
-    }
-    return null;
+function highlightNeighbourhood(node) {
+    if (!cy || !node?.length) return;
+    const nearby = node.closedNeighborhood().filter(':visible').union(node);
+    const nextFaded = cy.elements(':visible').not(nearby);
+    cy.batch(() => {
+        faded.not(nextFaded).removeClass('faded');
+        nextFaded.not(faded).addClass('faded');
+        highlighted.not(nearby).removeClass('hl show-label');
+        nearby.not(highlighted).addClass('hl show-label');
+    });
+    faded = nextFaded;
+    highlighted = nearby;
 }
 
-function onMouseMove(e) {
-    if (!network || !container) return;
-    const rect = container.getBoundingClientRect();
-    const point = network.DOMtoCanvas({ x: e.clientX - rect.left, y: e.clientY - rect.top });
-    const canvas = container.querySelector('canvas');
-    if (canvas) canvas.style.cursor = infoIconAt(point) ? 'pointer' : '';
+function clearHighlight() {
+    if (!cy) return;
+    cy.batch(() => {
+        faded.removeClass('faded');
+        highlighted.removeClass('hl show-label');
+    });
+    faded = cy.collection();
+    highlighted = cy.collection();
 }
 
-function highlight(id) {
-    if (!nodes) return;
-    if (!id) {
-        nodes.update(rawNodes.map(n => ({ id: n.id, opacity: 1 })));
-        return;
-    }
-    const keep = new Set([id, ...network.getConnectedNodes(id)]);
-    nodes.update(rawNodes.map(n => ({ id: n.id, opacity: keep.has(n.id) ? 1 : 0.25 })));
+function nodeId(index) {
+    return `node-${index}`;
+}
+
+function validColor(value) {
+    return typeof value === 'string' && HEX_COLOR.test(value);
+}
+
+function shortLabel(value) {
+    const text = String(value ?? '');
+    return text.length > MAX_LABEL_LENGTH ? `${text.slice(0, MAX_LABEL_LENGTH - 1)}\u2026` : text;
+}
+
+function ms(value) {
+    return `${value.toFixed(0)} ms`;
 }

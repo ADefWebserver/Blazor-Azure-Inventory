@@ -1,9 +1,29 @@
+@implements IDisposable
 <RadzenStack Gap="1.25rem" class="graph-pane">
     <RadzenStack Gap="0.5rem">
         <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">Search</RadzenText>
         <RadzenAutoComplete Data="@_nodeOptions" TextProperty="@nameof(NodeOption.Display)" Placeholder="Find a node..."
                             SelectedItemChanged="@OnSelected" Style="width: 100%;" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" />
     </RadzenStack>
+
+    @if (ActiveChips.Count > 0)
+    {
+        <RadzenStack Gap="0.5rem" role="group" aria-label="Active filters">
+            <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
+                <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">Active filters</RadzenText>
+                <RadzenButton Text="Reset all" Variant="Variant.Text" Size="ButtonSize.ExtraSmall" Click="@ResetAllAsync" />
+            </RadzenStack>
+            <div class="graph-chips">
+                @foreach (var chip in ActiveChips)
+                {
+                    <span class="graph-chip">
+                        <span>@chip.Label</span>
+                        <button type="button" aria-label="@($"Remove filter {chip.Label}")" @onclick="() => RemoveChipAsync(chip.Key)">×</button>
+                    </span>
+                }
+            </div>
+        </RadzenStack>
+    }
 
     <RadzenStack Gap="0.5rem">
         <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
@@ -18,66 +38,160 @@
                         Placeholder="All resource groups" AllowFiltering="true" Style="width: 100%;" />
     </RadzenStack>
 
-    <RadzenStack Gap="0.5rem">
-        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
-            <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">Tag</RadzenText>
-            <RadzenButton Text="Clear" Variant="Variant.Text" Size="ButtonSize.ExtraSmall" Click="@ClearTagAsync" />
-        </RadzenStack>
-        <RadzenAutoComplete Data="@_tagNames" Placeholder="Tag name, e.g. conn-out-SqlDatabase" Style="width: 100%;"
-                            Value="@Filter.TagName" ValueChanged="@(async (string v) => { Filter.TagName = v; await Changed(); })"
-                            FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" aria-label="Tag name" />
-        <RadzenTextBox Placeholder="Value contains (optional)" Style="width: 100%;" Value="@Filter.TagValue"
-                       ValueChanged="@(async (string v) => { Filter.TagValue = v; await Changed(); })" aria-label="Tag value contains" />
-    </RadzenStack>
-
-    <RadzenStack Gap="0.5rem">
-        <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">Display</RadzenText>
-        @foreach (var (label, getter, setter) in DisplayToggles())
-        {
-            <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
-                <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">@label</RadzenText>
-                <RadzenSwitch Value="@getter()" ValueChanged="@(async (bool v) => { setter(v); await Changed(); })" />
-            </RadzenStack>
-        }
-    </RadzenStack>
-
     <RadzenStack Gap="0.25rem">
         <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
-            <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">Node types</RadzenText>
+            <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">Resource types</RadzenText>
             <RadzenButton Text="Select all" Variant="Variant.Text" Size="ButtonSize.ExtraSmall" Click="@SelectAllAsync" />
         </RadzenStack>
-        @foreach (var (type, color) in NodeTypeStyles.All)
+        @foreach (var (category, types) in Categories)
         {
-            var count = Facets.NodeTypeCounts.GetValueOrDefault(type);
-            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
-                <RadzenCheckBox TValue="bool" Value="@Filter.NodeTypes.Contains(type)" Name="@($"type-{type}")"
-                                ValueChanged="@(async (bool v) => await ToggleTypeAsync(type, v))" />
-                <span class="type-swatch" style="background: @color;"></span>
-                <RadzenLabel Text="@type" Component="@($"type-{type}")" Style="flex: 1;" />
-                <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">@count</RadzenText>
+            var state = CategoryState(types);
+            var expanded = _expanded.Contains(category);
+            var total = types.Sum(t => Facets.NodeTypeCounts.GetValueOrDefault(t.Type));
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem" class="graph-category-row">
+                <button type="button" class="graph-category-toggle" aria-expanded="@(expanded ? "true" : "false")"
+                        aria-label="@($"{(expanded ? "Collapse" : "Expand")} {category}")" @onclick="() => ToggleExpanded(category)">
+                    <RadzenIcon Icon="@(expanded ? "expand_more" : "chevron_right")" />
+                </button>
+                <RadzenCheckBox TValue="bool?" TriState="true" Value="@state" Name="@($"category-{category}")"
+                                ValueChanged="@(async (bool? _) => await ToggleCategoryAsync(category))" />
+                <RadzenLabel Text="@category" Component="@($"category-{category}")" Style="flex: 1;" />
+                <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">@total</RadzenText>
             </RadzenStack>
+            @if (expanded)
+            {
+                @foreach (var (type, color) in types)
+                {
+                    var count = Facets.NodeTypeCounts.GetValueOrDefault(type);
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem" class="graph-type-row">
+                        <RadzenCheckBox TValue="bool" Value="@Filter.NodeTypes.Contains(type)" Name="@($"type-{type}")"
+                                        ValueChanged="@(async (bool v) => await ToggleTypeAsync(type, v))" />
+                        <span class="type-swatch" style="background: @color;"></span>
+                        <RadzenLabel Text="@type" Component="@($"type-{type}")" Style="flex: 1;" />
+                        <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">@count</RadzenText>
+                    </RadzenStack>
+                }
+            }
         }
     </RadzenStack>
+
+    <RadzenPanel AllowCollapse="true" Collapsed="@_tagsInitiallyCollapsed" Text="Tags">
+        <RadzenStack Gap="0.5rem">
+            <RadzenAutoComplete Data="@_tagNames" Placeholder="Tag name, e.g. conn-out-SqlDatabase" Style="width: 100%;"
+                                Value="@Filter.TagName" ValueChanged="@(async (string v) => { Filter.TagName = v; await DebouncedChangedAsync(); })"
+                                FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" aria-label="Tag name" />
+            <RadzenTextBox Placeholder="Value contains (optional)" Style="width: 100%;" Value="@Filter.TagValue" Immediate="true"
+                           ValueChanged="@(async (string v) => { Filter.TagValue = v; await DebouncedChangedAsync(); })" aria-label="Tag value contains" />
+            <RadzenButton Text="Clear" Variant="Variant.Text" Size="ButtonSize.ExtraSmall" Click="@ClearTagAsync" Style="align-self: flex-start;" />
+        </RadzenStack>
+    </RadzenPanel>
+
+    <RadzenPanel AllowCollapse="true" Collapsed="true" Text="Advanced">
+        <RadzenStack Gap="0.5rem">
+            @foreach (var (label, getter, setter) in DisplayToggles())
+            {
+                <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
+                    <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">@label</RadzenText>
+                    <RadzenSwitch Value="@getter()" ValueChanged="@(async (bool v) => { setter(v); await Changed(); })" aria-label="@label" />
+                </RadzenStack>
+            }
+        </RadzenStack>
+    </RadzenPanel>
 </RadzenStack>
 
 @code {
+    private static readonly IReadOnlyList<(string Category, IReadOnlyList<(string Type, string Color)> Types)> Categories =
+        NodeCategories.Order
+            .Where(category => category != NodeCategories.Scope)
+            .Select(category => (category, (IReadOnlyList<(string Type, string Color)>)NodeTypeStyles.All
+                .Where(t => NodeCategories.ByType.GetValueOrDefault(t.Type) == category)
+                .ToList()))
+            .Where(group => group.Item2.Count > 0)
+            .ToList();
+
+    private readonly HashSet<string> _expanded = new(StringComparer.Ordinal);
+    private IReadOnlyList<GraphNode>? _cachedNodes;
+    private CancellationTokenSource? _debounce;
+    private bool _tagsInitiallyCollapsed = true;
+
     [Parameter, EditorRequired] public GraphFacets Facets { get; set; } = default!;
     [Parameter, EditorRequired] public GraphFilterState Filter { get; set; } = default!;
     [Parameter] public IReadOnlyList<GraphNode> Nodes { get; set; } = [];
     [Parameter] public EventCallback FilterChanged { get; set; }
     [Parameter] public EventCallback<string> OnFindNode { get; set; }
+    [Parameter] public int DebounceMs { get; set; } = 300;
 
     private List<NodeOption> _nodeOptions = new();
     private List<string> _tagNames = new();
 
+    internal object NodeOptionsInstance => _nodeOptions;
+
+    protected override void OnInitialized() =>
+        _tagsInitiallyCollapsed = string.IsNullOrWhiteSpace(Filter?.TagName) && string.IsNullOrWhiteSpace(Filter?.TagValue);
+
     protected override void OnParametersSet()
     {
+        if (ReferenceEquals(Nodes, _cachedNodes)) return;
+        _cachedNodes = Nodes;
         _nodeOptions = Nodes.Select(n => new NodeOption(n.Id, $"{n.Label} ({n.Type})")).OrderBy(o => o.Display).ToList();
         _tagNames = Nodes.SelectMany(n => n.GetTags().Keys)
             .Select(k => System.Text.RegularExpressions.Regex.Replace(k, @"-\d+$", ""))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private IReadOnlyList<FilterChip> ActiveChips
+    {
+        get
+        {
+            var chips = new List<FilterChip>();
+            if (Filter.OnlyConnected) chips.Add(new("onlyConnected", "Only connected"));
+            if (Filter.HideExternal) chips.Add(new("hideExternal", "Hide external"));
+            if (Filter.HideEmulator) chips.Add(new("hideEmulator", "Hide emulator"));
+            if (Filter.ShowLowConfidence) chips.Add(new("lowConfidence", "Low-confidence edges"));
+            if (Filter.ShowChildResources) chips.Add(new("children", "Child resources"));
+            if (Filter.Subscriptions.Count > 0)
+                chips.Add(new("subscriptions", Filter.Subscriptions.Count == 1 ? "1 subscription" : $"{Filter.Subscriptions.Count} subscriptions"));
+            if (Filter.ResourceGroups.Count > 0)
+                chips.Add(new("resourceGroups", Filter.ResourceGroups.Count == 1 ? "1 resource group" : $"{Filter.ResourceGroups.Count} resource groups"));
+            if (!string.IsNullOrWhiteSpace(Filter.TagName))
+                chips.Add(new("tag", string.IsNullOrWhiteSpace(Filter.TagValue) ? $"Tag: {Filter.TagName}" : $"Tag: {Filter.TagName} ~ {Filter.TagValue}"));
+            return chips;
+        }
+    }
+
+    private async Task RemoveChipAsync(string key)
+    {
+        switch (key)
+        {
+            case "onlyConnected": Filter.OnlyConnected = false; break;
+            case "hideExternal": Filter.HideExternal = false; break;
+            case "hideEmulator": Filter.HideEmulator = false; break;
+            case "lowConfidence": Filter.ShowLowConfidence = false; break;
+            case "children": Filter.ShowChildResources = false; break;
+            case "subscriptions": Filter.Subscriptions = new(); break;
+            case "resourceGroups": Filter.ResourceGroups = new(); break;
+            case "tag": Filter.TagName = null; Filter.TagValue = null; break;
+            default: return;
+        }
+        await Changed();
+    }
+
+    private async Task ResetAllAsync()
+    {
+        var defaults = new GraphFilterState();
+        Filter.NodeTypes = NodeTypeStyles.All.Select(t => t.Type).Where(t => !NodeTypeStyles.HiddenByDefault.Contains(t)).ToList();
+        Filter.Subscriptions = new();
+        Filter.ResourceGroups = new();
+        Filter.OnlyConnected = defaults.OnlyConnected;
+        Filter.HideExternal = defaults.HideExternal;
+        Filter.HideEmulator = defaults.HideEmulator;
+        Filter.ShowLowConfidence = defaults.ShowLowConfidence;
+        Filter.ShowChildResources = defaults.ShowChildResources;
+        Filter.TagName = null;
+        Filter.TagValue = null;
+        await Changed();
     }
 
     private async Task ClearTagAsync()
@@ -87,15 +201,52 @@
         await Changed();
     }
 
+    private async Task DebouncedChangedAsync()
+    {
+        _debounce?.Cancel();
+        _debounce?.Dispose();
+        var source = _debounce = new CancellationTokenSource();
+        try
+        {
+            await Task.Delay(DebounceMs, source.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        await Changed();
+    }
+
     private IEnumerable<(string Label, Func<bool> Get, Action<bool> Set)> DisplayToggles()
     {
         yield return ("Only connected nodes", () => Filter.OnlyConnected, v => Filter.OnlyConnected = v);
         yield return ("Hide external", () => Filter.HideExternal, v => Filter.HideExternal = v);
         yield return ("Hide emulator", () => Filter.HideEmulator, v => Filter.HideEmulator = v);
         yield return ("Show low-confidence edges", () => Filter.ShowLowConfidence, v => Filter.ShowLowConfidence = v);
+        yield return ("Show child resources", () => Filter.ShowChildResources, v => Filter.ShowChildResources = v);
     }
 
     private Task Changed() => FilterChanged.InvokeAsync();
+
+    private bool? CategoryState(IReadOnlyList<(string Type, string Color)> types)
+    {
+        var selected = types.Count(t => Filter.NodeTypes.Contains(t.Type));
+        return selected == 0 ? false : selected == types.Count ? true : null;
+    }
+
+    private void ToggleExpanded(string category)
+    {
+        if (!_expanded.Remove(category)) _expanded.Add(category);
+    }
+
+    private async Task ToggleCategoryAsync(string category)
+    {
+        var types = Categories.First(c => c.Category == category).Types.Select(t => t.Type).ToList();
+        var selectAll = !types.All(Filter.NodeTypes.Contains);
+        Filter.NodeTypes = Filter.NodeTypes.Where(t => !types.Contains(t)).ToList();
+        if (selectAll) Filter.NodeTypes.AddRange(types);
+        await Changed();
+    }
 
     private async Task ToggleTypeAsync(string type, bool enabled)
     {
@@ -122,5 +273,12 @@
         if (item is NodeOption option) await OnFindNode.InvokeAsync(option.Id);
     }
 
+    public void Dispose()
+    {
+        _debounce?.Cancel();
+        _debounce?.Dispose();
+    }
+
     private sealed record NodeOption(string Id, string Display);
+    private sealed record FilterChip(string Key, string Label);
 }

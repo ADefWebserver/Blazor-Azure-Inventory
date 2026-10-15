@@ -1,0 +1,32 @@
+@* Dependencies grouped by category. Labels and setting keys are tenant-controlled and rendered as encoded text only; setting values are never shown. *@
+@if (Groups is { Count: > 0 })
+{
+    <RadzenStack Gap="0.5rem" role="group" aria-label="@Title">
+        <RadzenText TextStyle="TextStyle.Overline" class="muted rz-m-0">@Title (@Groups.Sum(g => g.Items.Count))</RadzenText>
+        @foreach (var group in Groups)
+        {
+            <RadzenStack Gap="0.25rem">
+                <RadzenText TextStyle="TextStyle.Caption" class="muted rz-m-0">@group.Category</RadzenText>
+                <ul class="graph-dependency-list">
+                    @foreach (var item in group.Items)
+                    {
+                        <li>
+                            <button type="button" class="graph-dependency-link" @onclick="() => OnSelect.InvokeAsync(item.NodeId)">@item.Label</button>
+                            <span class="muted">(@item.Type)</span>
+                            @if (!string.IsNullOrWhiteSpace(item.SettingKeys))
+                            {
+                                <span class="mono">@item.SettingKeys</span>
+                            }
+                        </li>
+                    }
+                </ul>
+            </RadzenStack>
+        }
+    </RadzenStack>
+}
+
+@code {
+    [Parameter] public IReadOnlyList<DependencyGroup>? Groups { get; set; }
+    [Parameter] public EventCallback<string> OnSelect { get; set; }
+    [Parameter] public string Title { get; set; } = "Talks to";
+}

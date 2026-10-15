@@ -1,6 +1,6 @@
 # Blazor Azure Inventory
 
-**Azure Inventory** is a .NET 10 Blazor Server app (Radzen UI) that signs users in with Microsoft Entra ID, inventories the Azure resources *they* can see, analyzes Web App, Function App, and Container App configuration to detect connections, builds an in-memory knowledge graph, visualizes it with vis-network, and answers questions through an AI chat backed by graph tools and a self-hosted, read-only Azure MCP Server.
+**Azure Inventory** is a .NET 10 Blazor Server app (Radzen UI) that signs users in with Microsoft Entra ID, inventories the Azure resources *they* can see, analyzes Web App, Function App, and Container App configuration to detect connections, builds an in-memory knowledge graph, visualizes it with Cytoscape.js (Overview and Focus views), and answers questions through an AI chat backed by graph tools and a self-hosted, read-only Azure MCP Server.
 
 ## See the [blog post](https://blazorhelpwebsite.com/ViewBlogPost/20093)
 
@@ -102,4 +102,5 @@ The suite covers the connection classifier (including the table in section 9.4 o
 - All providers (OpenAI, Azure OpenAI, Azure AI Foundry, Anthropic, and Google AI) use tool calling. Models without function calling (for example embeddings, TTS, realtime, or `o1-mini`) use the grounding fallback.
 - Azure OpenAI and Foundry deployment names cannot be listed with an API key, so they are entered manually.
 - Pin the Azure MCP Server image tag (`AZURE_MCP_TAG`) and verify tool names against that version before release.
-- vis-network is served from `wwwroot/lib/vis-network` (see `libman.json`) so the Content Security Policy needs no external script origins.
+- Cytoscape.js and the Fluent UI System Icons are served from `wwwroot/lib/cytoscape` and `wwwroot/lib/fluent-icons` (see `libman.json`) so the Content Security Policy needs no external script origins. Run `deploy/Verify-VendoredAssets.ps1` to check their SHA-256 hashes; CI does this on every push.
+- **Knowledge Graph release note:** the graph opens in an Overview that hides unconnected resources by default. Turn off **Only connected** (under **Advanced** in the filter panel, or remove its chip) to see them. This is applied once to filters saved before the change, and your choice is kept afterwards. Child resources (databases, containers, slots) are folded into their parent; turn on **Show child resources** to see them. `graph?focus=<resource-id>` links now open a Focus view of that resource.

@@ -3,11 +3,36 @@
   "defaultProvider": "jsdelivr",
   "libraries": [
     {
-      "library": "vis-network@10.1.2",
-      "destination": "wwwroot/lib/vis-network/",
+      "library": "cytoscape@3.34.3",
+      "destination": "wwwroot/lib/cytoscape/",
       "files": [
-        "standalone/esm/vis-network.min.js",
-        "LICENSE-MIT"
+        "dist/cytoscape.esm.min.mjs",
+        "LICENSE"
+      ]
+    },
+    {
+      "library": "@fluentui/svg-icons@1.1.344",
+      "destination": "wwwroot/lib/fluent-icons/",
+      "files": [
+        "icons/globe_24_regular.svg",
+        "icons/flash_24_regular.svg",
+        "icons/cube_24_regular.svg",
+        "icons/box_multiple_24_regular.svg",
+        "icons/server_24_regular.svg",
+        "icons/database_24_regular.svg",
+        "icons/storage_24_regular.svg",
+        "icons/folder_24_regular.svg",
+        "icons/list_24_regular.svg",
+        "icons/data_usage_24_regular.svg",
+        "icons/top_speed_24_regular.svg",
+        "icons/arrow_routing_24_regular.svg",
+        "icons/key_24_regular.svg",
+        "icons/cloud_24_regular.svg",
+        "icons/link_24_regular.svg",
+        "icons/building_24_regular.svg",
+        "icons/receipt_24_regular.svg",
+        "icons/group_24_regular.svg",
+        "icons/circle_24_regular.svg"
       ]
     }
   ]

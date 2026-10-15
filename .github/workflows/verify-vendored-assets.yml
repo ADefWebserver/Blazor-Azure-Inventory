@@ -1,0 +1,17 @@
+name: Verify vendored assets
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check SHA-256 of vendored wwwroot/lib files
+        shell: pwsh
+        run: ./deploy/Verify-VendoredAssets.ps1

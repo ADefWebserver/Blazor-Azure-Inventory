@@ -3,6 +3,10 @@
 ###############################################################################
 * text=auto
 
+# Vendored libraries must stay byte-identical so deploy/Verify-VendoredAssets.ps1 can check their hashes.
+BlazorAzureInventory/wwwroot/lib/cytoscape/** -text
+BlazorAzureInventory/wwwroot/lib/fluent-icons/** -text
+
 ###############################################################################
 # Set default behavior for command prompt diff.
 #

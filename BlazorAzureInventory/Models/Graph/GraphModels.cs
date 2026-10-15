@@ -106,22 +106,74 @@ public static class TagKeys
 /// <summary>Client-side filter state sent to graph-view.js. Applied without re-sending graph data.</summary>
 public sealed class GraphFilterState
 {
+    /// <summary>2: <see cref="OnlyConnected"/> defaults to true and older saved filters are switched on once.</summary>
+    public const int CurrentFilterVersion = 2;
+
+    /// <summary>No initializer: filters saved before versioning deserialize as 0.</summary>
+    public int FilterVersion { get; set; }
+
     public List<string> NodeTypes { get; set; } = new();
 
     /// <summary>Node types that existed when the filter was saved; types added later are shown by default.</summary>
     public List<string> KnownNodeTypes { get; set; } = new();
     public List<string> Subscriptions { get; set; } = new();
     public List<string> ResourceGroups { get; set; } = new();
-    public bool OnlyConnected { get; set; }
+    public bool OnlyConnected { get; set; } = true;
     public bool HideExternal { get; set; }
     public bool HideEmulator { get; set; } = true;
     public bool ShowLowConfidence { get; set; }
+    public bool ShowChildResources { get; set; }
 
     /// <summary>Only show nodes with this tag (overflow tags such as <c>name-2</c> also match).</summary>
     public string? TagName { get; set; }
 
     /// <summary>Optional case-insensitive substring the tag value must contain.</summary>
     public string? TagValue { get; set; }
+
+    /// <summary>Migrates a saved filter to <see cref="CurrentFilterVersion"/>.</summary>
+    public void Upgrade()
+    {
+        if (FilterVersion < 2) OnlyConnected = true;
+        FilterVersion = CurrentFilterVersion;
+    }
+}
+
+/// <summary>User-facing groups of node types, used by the filter panel, legend, Focus ring order, and summary.</summary>
+public static class NodeCategories
+{
+    public const string Apps = "Apps";
+    public const string Data = "Data";
+    public const string Storage = "Storage";
+    public const string Messaging = "Messaging";
+    public const string Secrets = "Secrets";
+    public const string Registry = "Registry";
+    public const string External = "External";
+    public const string Scope = "Scope";
+
+    public static readonly IReadOnlyList<string> Order = [Apps, Data, Storage, Messaging, Secrets, Registry, External, Scope];
+
+    public static readonly IReadOnlyDictionary<string, string> ByType = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["WebApp"] = Apps,
+        ["FunctionApp"] = Apps,
+        ["WebAppSlot"] = Apps,
+        ["ContainerApp"] = Apps,
+        ["SqlServer"] = Data,
+        ["SqlDatabase"] = Data,
+        ["CosmosAccount"] = Data,
+        ["RedisCache"] = Data,
+        ["StorageAccount"] = Storage,
+        ["BlobContainer"] = Storage,
+        ["StorageQueue"] = Storage,
+        ["ServiceBusNamespace"] = Messaging,
+        ["KeyVault"] = Secrets,
+        ["ContainerRegistry"] = Registry,
+        ["ExternalService"] = External,
+        ["External"] = External,
+        ["Tenant"] = Scope,
+        ["Subscription"] = Scope,
+        ["ResourceGroup"] = Scope,
+    };
 }
 
 public sealed record GraphFacets(

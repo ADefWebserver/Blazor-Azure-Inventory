@@ -81,6 +81,7 @@ public class Program
         builder.Services.AddSingleton<IValidateOptions<InventoryOptions>, ExternalServiceOptionsValidator>();
         builder.Services.AddOptions<AzureMcpOptions>().BindConfiguration("AzureMcp").ValidateDataAnnotations().ValidateOnStart();
         builder.Services.AddOptions<GraphSessionOptions>().BindConfiguration("GraphSession").ValidateDataAnnotations();
+        builder.Services.AddOptions<GraphViewOptions>().BindConfiguration("GraphView").ValidateDataAnnotations();
         builder.Services.AddOptions<SecurityOptions>().BindConfiguration("Security");
         builder.Services.AddOptions<AIOptions>().BindConfiguration("AI").ValidateDataAnnotations();
         builder.Services.AddOptions<TaggingOptions>().BindConfiguration("Tagging").ValidateDataAnnotations();
@@ -116,6 +117,8 @@ public class Program
         builder.Services.AddSingleton<InventoryGraphBuilder>();
         builder.Services.AddSingleton<InventorySessionStore>();
         builder.Services.AddSingleton<GraphQueryService>();
+        builder.Services.AddSingleton<GraphViewService>();
+        builder.Services.AddSingleton<GraphLayoutService>();
 
         // Tags (TagWriteService is the only code path that writes to Azure)
         builder.Services.AddSingleton<TagValidator>();
