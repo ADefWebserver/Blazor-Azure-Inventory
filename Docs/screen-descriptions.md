@@ -285,7 +285,7 @@ A header row, then a `RadzenSplitter` with three resizable, collapsible panes.
 #### Header
 
 - Title **Knowledge Graph**, the scan-age badge, and the scope description (for example "1 tenant, 1 subscription").
-- **Show changes (n)** appears when the scan differs from the previous one. **Copy link** appears in Focus mode. The `more_vert` overflow menu holds **Rebuild graph** and **Export JSON**.
+- **Show changes (n)** appears when the scan differs from the previous one. **Copy link** appears in Focus mode. If clipboard access is unavailable, it opens a Radzen modal dialog **Copy graph link** with the explanation "Clipboard access was unavailable. Copy this link manually.", a read-only link field that receives focus, and **Close**. Tab stays inside the dialog. Esc, a click on the overlay, or **Close** closes it, and focus returns to **Copy link**. The `more_vert` overflow menu holds **Rebuild graph** and **Export JSON**.
 - A breadcrumb in Focus mode: **Overview › contoso-web › contoso-sql**. Each segment is a button. The last one is the current page.
 
 #### Left Pane: Filters (about 280 px)
@@ -295,7 +295,7 @@ A header row, then a `RadzenSplitter` with three resizable, collapsible panes.
 - **Scope:** multi-select `RadzenDropDown` for Subscriptions and another for Resource groups, with **Reset**.
 - **Resource types:** grouped by category (Apps, Data, Storage, Messaging, Secrets, Registry, External, Scope). Each group has a tri-state checkbox and expands to the individual types, each with a colour swatch. **Select all** resets the selection.
 - **Tags** (collapsible `RadzenPanel`): tag name and value inputs with a 300 ms debounce and **Clear**.
-- **Advanced** (collapsible `RadzenPanel`): `RadzenSwitch` toggles for *Only connected nodes* (on by default), *Hide external*, *Hide emulator*, *Show low-confidence edges*, and *Show child resources*.
+- **Advanced** (collapsible `RadzenPanel`): `RadzenSwitch` toggles for *Only connected nodes* (on by default), *Hide external*, *Hide emulator*, *Show low-confidence edges*, and *Show child resources*. In Focus mode, changing *Hide emulator* or *Show low-confidence edges* rebuilds the Focus view on the server, so the affected neighbours disappear or come back, and the Focus centre is selected again. Expansions that no longer add anything are dropped, with a notification. Other filters only hide or show what is already drawn.
 
 #### Center Pane: Graph Canvas
 
@@ -344,7 +344,9 @@ A `RadzenCard` for the selected node:
 
 - Header: node label (`orders`), type badge (SQL Database), and a link **Open in Azure portal** (`open_in_new` icon).
 - Buttons: **Focus** (`center_focus_strong`), **Expand** (`open_in_full`, Focus mode only, disabled with a reason when the node cannot be expanded), and **Open details**.
-- **Talks to:** for the Focus centre, a list of its dependencies grouped by category (for example Data, Secrets, External), with setting keys (for example `ConnectionStrings:Orders`). Setting keys only, never values. Each item is clickable and focuses that resource. If there are none, the panel says "No connections detected."
+- **Talks to:** shown only when the Focus centre is selected (matched without regard to the URL's casing). It lists the centre's dependencies grouped by category (for example Data, Secrets, External), with setting keys (for example `ConnectionStrings:Orders`). Setting keys only, never values. Each item is clickable and focuses that resource. If there are none, the panel says "No connections detected." Other selected nodes have no "Talks to" section.
+- Opening a Focus link or picking a Search result selects the Focus centre, so the panel shows its details and "Talks to" without a click.
+- **Aggregate card:** selecting a `+N more` node (for example `+60 more apps`) shows a card with that label, the text "Not shown in this Focus view.", and a **Hidden resources (N)** list of every hidden resource, sorted by name, with setting keys only. Each item is clickable and focuses that resource. The card has no Focus, Expand, or Open details buttons. If a later expansion draws one of the hidden resources, it leaves the list and the count drops by one.
 - **Properties** and **Connections (n):** collapsed `RadzenPanel`s. Properties is a list of key/value pairs. Connections is a grid with Direction, Edge type, Other node, and Setting keys.
 - When an edge is selected, the panel shows its Source and Target and lists every merged underlying connection.
 - Empty state: "Select a node to see its details."
@@ -363,13 +365,16 @@ The URL describes the mode, so links can be shared and bookmarked, and browser B
 - Filters are not part of the URL.
 - Invalid, duplicate, or unknown `expand` values are dropped and a notification says how many. At most 20 expansions are kept.
 - A resource that is not in the signed-in user's scan shows the notification "This resource is not in your current scan." and falls back to the Overview.
+- A `focus` value that is a scope node opens the Overview filtered to that scope and removes `focus` from the URL. A resource group sets both its subscription and its name, so a same-named group in another subscription is not shown.
 
 ### 7.3 States to Mock
 
 - **No graph yet:** an info `RadzenAlert` "No graph available. Run a scan first." with a primary `RadzenButton` **Go to Inventory and Scan**. The canvas area is empty.
 - **Rendering:** a `RadzenProgressBarCircular` over the canvas with "Rendering graph...".
 - **Overview with a node selected:** as described above.
-- **Focus with an expansion:** a breadcrumb with two resource segments, **Copy link** visible, and the "Talks to" list for the selected node.
+- **Focus with an expansion:** a breadcrumb with two resource segments, **Copy link** visible, and the Focus centre selected with its "Talks to" list.
+- **Focus with an aggregate selected:** a `+60 more apps` node selected and the aggregate card listing the hidden apps.
+- **Copy link fallback:** the **Copy graph link** dialog over the page, with the link field focused.
 - **Filtered:** active-filter chips in the left pane and a count caption such as "Showing 491 of 1,034 nodes".
 
 ---

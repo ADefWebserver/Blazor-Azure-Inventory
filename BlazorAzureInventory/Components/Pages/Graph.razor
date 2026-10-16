@@ -18,6 +18,7 @@
 @inject ResourceDialogLauncher Launcher
 @inject NavigationManager Nav
 @inject NotificationService Notifications
+@inject DialogService Dialogs
 @inject Microsoft.Extensions.Options.IOptions<GraphViewOptions> GraphViewOptions
 
 <PageTitle>Knowledge Graph - Azure Inventory</PageTitle>
@@ -74,19 +75,6 @@
         </nav>
     }
 
-    @if (_copyUrl is not null)
-    {
-        <div class="graph-copy-backdrop" role="presentation" @onclick="() => _copyUrl = null">
-            <section class="graph-copy-dialog" role="dialog" aria-modal="true" aria-labelledby="graph-copy-title"
-                     @onclick:stopPropagation="true">
-                <h2 id="graph-copy-title">Copy graph link</h2>
-                <p>Clipboard access was unavailable. Copy this link manually.</p>
-                <input type="text" value="@_copyUrl" readonly aria-label="Graph link" />
-                <RadzenButton Text="Close" ButtonStyle="ButtonStyle.Light" Click="@(() => _copyUrl = null)" />
-            </section>
-        </div>
-    }
-
     @if (_graph is null || _index is null || _facets is null)
     {
         <RadzenAlert AlertStyle="AlertStyle.Info" Shade="Shade.Lighter" AllowClose="false">
@@ -101,7 +89,7 @@
     {
         <RadzenSplitter class="graph-page">
             <RadzenSplitterPane Size="280px" Min="200px" Collapsible="true">
-                <GraphFilterPanel Facets="@_facets" Filter="@_filter" Nodes="@_graph.Nodes" FilterChanged="@ApplyFilterAsync" OnFindNode="@NavigateToFocus" />
+                <GraphFilterPanel Facets="@_facets" Filter="@_filter" Nodes="@_graph.Nodes" TagsVersion="@_tagsVersion" FilterChanged="@ApplyFilterAsync" OnFindNode="@NavigateToFocus" />
             </RadzenSplitterPane>
             <RadzenSplitterPane>
                 <div class="graph-pane" style="overflow: hidden;">
@@ -114,7 +102,8 @@
                                  OnFocus="@NavigateToFocus" OnExpand="@ExpandSelectedAsync"
                                  IsFocusMode="@(_route is not null)" CanExpand="@CanExpandSelected"
                                  ExpandDisabledReason="@ExpandDisabledReason"
-                                 FocusId="@_route?.Focus" Dependencies="@_dependencies" />
+                                 FocusId="@_route?.Focus" Dependencies="@_dependencies"
+                                 AggregateLabel="@_selectedAggregate?.Label" AggregateMembers="@_selectedAggregate?.Members" />
             </RadzenSplitterPane>
         </RadzenSplitter>
     }
@@ -132,6 +121,7 @@
     private GraphNode? _selected;
     private GraphEdge? _selectedEdge;
     private IReadOnlyList<GraphEdge> _selectedEdges = [];
+    private (string Label, IReadOnlyList<DependencyGroup> Members)? _selectedAggregate;
     private GraphCanvas? _canvas;
     private string? _sessionKey;
     private InventorySession? _session;
@@ -142,8 +132,13 @@
     private bool _initialized;
     private bool _routeRendered;
     private bool _showChanges;
-    private bool _overviewShowsChildren;
-    private string? _copyUrl;
+    // Latest route render or Overview reload; an awaited result is published only while its number is still current.
+    private int _renderGeneration;
+    // ShowChildResources of the newest Overview load, in flight or published; null when no Overview is loading or shown.
+    private bool? _overviewTarget;
+    // Server-side filter values the current Focus payload was built with; null when no Focus payload is shown.
+    private (bool HideEmulator, bool ShowLowConfidence)? _focusBuiltWith;
+    private int _tagsVersion;
     private readonly GraphFilterState _filter = new()
     {
         NodeTypes = NodeTypeStyles.All.Select(t => t.Type).Where(t => !NodeTypeStyles.HiddenByDefault.Contains(t)).ToList()
@@ -194,14 +189,19 @@
         _selected = null;
         _selectedEdge = null;
         _selectedEdges = [];
+        _selectedAggregate = null;
     }
 
     private async Task ApplyFilterAsync()
     {
-        if (_route is null && _session is not null && _view is not null && _view.Mode == GraphViewMode.Overview
-            && _filter.ShowChildResources != _overviewShowsChildren)
+        if (_route is null && _session is not null && _filter.ShowChildResources != _overviewTarget)
         {
-            await LoadOverviewAsync(_session);
+            await LoadOverviewAsync(_session, _filter.ShowChildResources, ++_renderGeneration);
+        }
+        else if (_route is not null && _focusBuiltWith != (_filter.HideEmulator, _filter.ShowLowConfidence))
+        {
+            // BuildFocus drops these nodes and edges on the server, so the browser filter cannot bring them back.
+            await RenderRouteAsync(force: true);
         }
         else
         {
@@ -293,15 +293,24 @@
 
     private void OnNodeSelected(int? nodeIndex)
     {
+        _selectedAggregate = null;
+        _selectedEdge = null;
+        if (nodeIndex is { } aggregateIndex && _view is not null && _index is not null
+            && _view.Aggregates.TryGetValue(aggregateIndex, out var membership) && aggregateIndex < _view.Nodes.Count)
+        {
+            _selectedAggregate = (_view.Nodes[aggregateIndex].Label, GraphViews.SummarizeMembers(_index, membership));
+            _selected = null;
+            return;
+        }
         var id = nodeIndex is { } i && _view is not null && i >= 0 && i < _view.NodeIds.Count
             ? _view.NodeIds[i]
             : null;
         _selected = id is not null && _index?.NodesById.TryGetValue(id, out var node) == true ? node : null;
-        _selectedEdge = null;
     }
 
     private void OnEdgeSelected(int? edgeIndex)
     {
+        _selectedAggregate = null;
         var edgeIds = edgeIndex is { } i && _view is not null && i >= 0 && i < _view.EdgeSources.Count
             ? _view.EdgeSources[i]
             : [];
@@ -329,12 +338,18 @@
         if (sessionKey != _sessionKey) return;
         _ = InvokeAsync(async () =>
         {
+            // Tags change in place on the same node list, so the filter panel needs a new version to refresh suggestions.
+            _tagsVersion++;
             if (_canvas is not null) await ApplyFilterToCanvasAsync();
             StateHasChanged();
         });
     }
 
-    public void Dispose() => Store.TagsChanged -= OnTagsChanged;
+    public void Dispose()
+    {
+        _renderGeneration++;
+        Store.TagsChanged -= OnTagsChanged;
+    }
 
     private async Task OnRenderedAsync()
     {
@@ -405,10 +420,14 @@
         var requested = GraphFocusRoute.Parse(Focus, Expand, GraphViewOptions.Value.MaxExpandInUrl, out var droppedExpand);
         if (!force && _routeRendered && Equals(requested, _route)) return;
 
+        // Incremented after the unchanged-route check so a no-op parameter set does not abandon an in-flight load.
+        var generation = ++_renderGeneration;
         _route = null;
         _dependencies = [];
         Load(_session?.Graph, _session?.Index);
         _view = null;
+        _overviewTarget = null;
+        _focusBuiltWith = null;
         if (_session?.Index is not { } index || _session.Graph is null)
         {
             _routeRendered = true;
@@ -419,7 +438,7 @@
         {
             if (droppedExpand > 0)
                 Notifications.Notify(NotificationSeverity.Info, "Expanded resources ignored", $"{droppedExpand} expanded resource(s) were ignored.");
-            await LoadOverviewAsync(_session);
+            if (!await LoadOverviewAsync(_session, _filter.ShowChildResources, generation)) return;
             _routeRendered = true;
             if (Focus is not null || (Expand?.Length ?? 0) > 0) NavigateToRoute(null, replace: true);
             return;
@@ -428,7 +447,7 @@
         if (!index.NodesById.TryGetValue(requested.Focus, out var focusNode))
         {
             Notifications.Notify(NotificationSeverity.Info, "Resource not in scan", "This resource is not in your current scan.");
-            await LoadOverviewAsync(_session);
+            if (!await LoadOverviewAsync(_session, _filter.ShowChildResources, generation)) return;
             _routeRendered = true;
             NavigateToRoute(null, replace: true);
             return;
@@ -436,8 +455,11 @@
 
         if (focusNode.Type is nameof(AzureResourceKind.Tenant) or nameof(AzureResourceKind.Subscription) or nameof(AzureResourceKind.ResourceGroup))
         {
-            ApplyScopeFocus(focusNode);
-            await LoadOverviewAsync(_session);
+            var (subscriptions, resourceGroups) = ScopeFilterFor(focusNode);
+            if (!await LoadOverviewAsync(_session, _filter.ShowChildResources, generation)) return;
+            // Committed only once the request is current, so an abandoned scope link never changes the filters.
+            if (subscriptions is not null) _filter.Subscriptions = subscriptions;
+            if (resourceGroups is not null) _filter.ResourceGroups = resourceGroups;
             _routeRendered = true;
             NavigateToRoute(null, replace: true);
             return;
@@ -467,6 +489,11 @@
 
         _route = new GraphFocusRoute(requested.Focus, acceptedExpansions);
         _view = view;
+        _focusBuiltWith = (_filter.HideEmulator, _filter.ShowLowConfidence);
+        _selected = focusNode;
+        _selectedEdge = null;
+        _selectedEdges = [];
+        _selectedAggregate = null;
         _dependencies = GraphViews.SummarizeDependencies(index, requested.Focus);
         _routeRendered = true;
         if (droppedUnknown > 0)
@@ -483,33 +510,48 @@
         return candidate.EdgeSources.SelectMany(sources => sources).Any(id => !previousEdges.Contains(id));
     }
 
-    private void ApplyScopeFocus(GraphNode node)
+    /// <summary>The scope filter a scope-node Focus link applies; a <c>null</c> list leaves that filter unchanged.</summary>
+    private static (List<string>? Subscriptions, List<string>? ResourceGroups) ScopeFilterFor(GraphNode node)
     {
         if (node.Type == nameof(AzureResourceKind.Subscription)
             && node.Data.GetValueOrDefault("subscriptionId")?.ToString() is { Length: > 0 } subscription)
-            _filter.Subscriptions = [subscription];
-        else if (node.Type == nameof(AzureResourceKind.ResourceGroup)
-                 && node.Data.GetValueOrDefault("resourceGroup")?.ToString() is { Length: > 0 } resourceGroup)
-        {
-            _filter.Subscriptions = [];
-            _filter.ResourceGroups = [resourceGroup];
-        }
-        else if (node.Type == nameof(AzureResourceKind.Tenant))
-        {
-            _filter.Subscriptions = [];
-            _filter.ResourceGroups = [];
-        }
+            return ([subscription], null);
+        // Resource-group names repeat across subscriptions, so the group's own subscription is applied too when known.
+        if (node.Type == nameof(AzureResourceKind.ResourceGroup)
+            && node.Data.GetValueOrDefault("resourceGroup")?.ToString() is { Length: > 0 } resourceGroup)
+            return (node.Data.GetValueOrDefault("subscriptionId")?.ToString() is { Length: > 0 } groupSubscription
+                ? [groupSubscription]
+                : [], [resourceGroup]);
+        if (node.Type == nameof(AzureResourceKind.Tenant))
+            return ([], []);
+        return (null, null);
     }
 
-    private async Task LoadOverviewAsync(InventorySession session)
+    /// <summary>
+    /// Loads the Overview for <paramref name="showChildResources"/>. Returns <c>false</c>, without changing the page,
+    /// when <paramref name="generation"/> is no longer the latest request once the layout is ready.
+    /// </summary>
+    private async Task<bool> LoadOverviewAsync(InventorySession session, bool showChildResources, int generation)
     {
-        if (session.Index is not { } index || session.Graph is null) return;
-        var layout = await GraphLayouts.GetOverviewLayoutAsync(session, _filter.ShowChildResources, CancellationToken.None);
-        _view = GraphViews.BuildOverview(index, layout, _filter.ShowChildResources);
-        _overviewShowsChildren = _filter.ShowChildResources;
+        if (session.Index is not { } index || session.Graph is null) return false;
+        _overviewTarget = showChildResources;
+        GraphLayout layout;
+        try
+        {
+            layout = await GraphLayouts.GetOverviewLayoutAsync(session, showChildResources, CancellationToken.None);
+        }
+        catch (Exception) when (generation != _renderGeneration)
+        {
+            return false;
+        }
+        if (generation != _renderGeneration) return false;
+        _view = GraphViews.BuildOverview(index, layout, showChildResources);
+        _focusBuiltWith = null;
         _selected = null;
         _selectedEdge = null;
         _selectedEdges = [];
+        _selectedAggregate = null;
+        return true;
     }
 
     private async Task CopyLinkAsync()
@@ -526,6 +568,16 @@
         catch (JSException)
         {
         }
-        _copyUrl = uri;
+        // Completes when the dialog closes; Radzen keeps Tab inside it and restores focus to Copy link afterwards.
+        await Dialogs.OpenAsync<CopyLinkDialog>("Copy graph link",
+            new Dictionary<string, object?> { [nameof(CopyLinkDialog.Url)] = uri },
+            new DialogOptions
+            {
+                Width = "32rem",
+                // Otherwise Radzen's autofocus timer moves focus from the link field to the title-bar close button.
+                AutoFocusFirstElement = false,
+                CloseDialogOnEsc = true,
+                CloseDialogOnOverlayClick = true
+            });
     }
 }

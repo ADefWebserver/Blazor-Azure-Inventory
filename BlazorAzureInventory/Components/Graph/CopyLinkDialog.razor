@@ -1,0 +1,21 @@
+@* Manual copy fallback when clipboard access is unavailable. Radzen's dialog traps Tab, closes on Esc, and restores focus to the opener. *@
+@inject DialogService DialogService
+
+<RadzenStack Gap="0.75rem">
+    <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">Clipboard access was unavailable. Copy this link manually.</RadzenText>
+    <input @ref="_input" type="text" class="graph-copy-link" value="@Url" readonly aria-label="Graph link" />
+    <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End">
+        <RadzenButton Text="Close" ButtonStyle="ButtonStyle.Light" Click="@(() => DialogService.Close())" />
+    </RadzenStack>
+</RadzenStack>
+
+@code {
+    [Parameter, EditorRequired] public string Url { get; set; } = "";
+
+    private ElementReference _input;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender) await _input.FocusAsync();
+    }
+}

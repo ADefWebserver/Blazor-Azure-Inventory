@@ -124,6 +124,28 @@ public class ComponentTests : BunitContext
     }
 
     [Fact]
+    public void FilterPanel_refreshes_tag_names_when_tags_version_changes()
+    {
+        var node = new GraphNode
+        {
+            Id = "a", Type = "WebApp", Label = "contoso-web",
+            Data = { [TagKeys.Tags] = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["old-key"] = "x" } }
+        };
+        var cut = RenderFilterPanel(new GraphFilterState(), [node], out _);
+        var options = cut.Instance.NodeOptionsInstance;
+        Assert.Equal(["old-key"], cut.Instance.TagNamesInstance);
+
+        node.Data[TagKeys.Tags] = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["new-key"] = "y" };
+        cut.Render(p => p.Add(x => x.Filter, new GraphFilterState()));
+        Assert.Equal(["old-key"], cut.Instance.TagNamesInstance);
+
+        cut.Render(p => p.Add(x => x.TagsVersion, 1));
+
+        Assert.Equal(["new-key"], cut.Instance.TagNamesInstance);
+        Assert.Same(options, cut.Instance.NodeOptionsInstance);
+    }
+
+    [Fact]
     public async Task FilterPanel_active_chips_show_migrated_toggle_and_remove_it()
     {
         var filter = new GraphFilterState { NodeTypes = ["WebApp"], HideEmulator = false };
@@ -207,6 +229,114 @@ public class ComponentTests : BunitContext
             .Add(x => x.OnExpand, (string id) => expanded.Add(id)));
         await focus.FindAll("button").Single(b => b.TextContent.Contains("Expand", StringComparison.Ordinal)).ClickAsync();
         Assert.Equal(["b"], expanded);
+    }
+
+    [Fact]
+    public void NodePropertiesPanel_hides_talks_to_for_non_centre_node()
+    {
+        var (graph, index, dependencies) = FocusPanelGraph();
+
+        var cut = Render<NodePropertiesPanel>(p => p
+            .Add(x => x.Node, graph.Nodes[1]).Add(x => x.Index, index)
+            .Add(x => x.IsFocusMode, true).Add(x => x.FocusId, "a")
+            .Add(x => x.Dependencies, dependencies));
+
+        Assert.DoesNotContain("Talks to", cut.Markup);
+        Assert.DoesNotContain("No connections detected.", cut.Markup);
+
+        cut.Render(p => p.Add(x => x.Dependencies, []));
+        Assert.DoesNotContain("No connections detected.", cut.Markup);
+    }
+
+    [Fact]
+    public void NodePropertiesPanel_matches_focus_centre_ignoring_case()
+    {
+        var (graph, index, dependencies) = FocusPanelGraph();
+
+        var cut = Render<NodePropertiesPanel>(p => p
+            .Add(x => x.Node, graph.Nodes[0]).Add(x => x.Index, index)
+            .Add(x => x.IsFocusMode, true).Add(x => x.FocusId, "A").Add(x => x.CanExpand, true)
+            .Add(x => x.Dependencies, dependencies));
+
+        Assert.Contains("Talks to (1)", cut.Markup);
+        Assert.DoesNotContain(cut.FindAll("button"), b => b.TextContent.Contains("Expand", StringComparison.Ordinal));
+
+        cut.Render(p => p.Add(x => x.Dependencies, []));
+        Assert.Contains("No connections detected.", cut.Markup);
+    }
+
+    private static (GraphDocument Graph, GraphIndex Index, IReadOnlyList<DependencyGroup> Dependencies) FocusPanelGraph()
+    {
+        var graph = new GraphDocument
+        {
+            Nodes = [new GraphNode { Id = "a", Type = "WebApp", Label = "app" }, new GraphNode { Id = "b", Type = "SqlDatabase", Label = "db" }],
+            Edges = [new GraphEdge { Id = "e1", Source = "a", Target = "b", Type = EdgeTypes.ConnectsTo }]
+        };
+        var index = new GraphIndex(graph);
+        var dependencies = new BlazorAzureInventory.Services.Graph.GraphViewService(
+                Microsoft.Extensions.Options.Options.Create(new BlazorAzureInventory.Models.Options.GraphViewOptions()))
+            .SummarizeDependencies(index, "a");
+        return (graph, index, dependencies);
+    }
+
+    [Fact]
+    public async Task NodePropertiesPanel_aggregate_card_lists_members_and_focuses_on_click()
+    {
+        var focused = new List<string>();
+        var members = new List<DependencyGroup>
+        {
+            new(NodeCategories.Apps,
+            [
+                new DependencyItem("web-61", "contoso-web-61", "WebApp", EdgeTypes.ConnectsTo, "SendGrid:ApiKeyName", "High"),
+                new DependencyItem("web-62", "contoso-web-62", "WebApp", EdgeTypes.ConnectsTo, "SendGrid:ApiKeyName", "High")
+            ])
+        };
+
+        var cut = Render<NodePropertiesPanel>(p => p
+            .Add(x => x.Index, new GraphIndex(new GraphDocument()))
+            .Add(x => x.IsFocusMode, true).Add(x => x.FocusId, "sendgrid").Add(x => x.CanExpand, true)
+            .Add(x => x.AggregateLabel, "+2 more apps").Add(x => x.AggregateMembers, members)
+            .Add(x => x.OnFocus, (string id) => focused.Add(id)));
+
+        Assert.Contains("+2 more apps", cut.Markup);
+        Assert.Contains("Not shown in this Focus view.", cut.Markup);
+        Assert.Contains("Hidden resources (2)", cut.Markup);
+        Assert.Contains("contoso-web-62", cut.Markup);
+        Assert.DoesNotContain(cut.FindAll("button"), b =>
+            b.TextContent.Contains("Expand", StringComparison.Ordinal)
+            || b.TextContent.Contains("Open details", StringComparison.Ordinal)
+            || b.TextContent.Contains("Focus", StringComparison.Ordinal));
+
+        await cut.FindAll("button.graph-dependency-link").Single(b => b.TextContent == "contoso-web-62").ClickAsync();
+        Assert.Equal(["web-62"], focused);
+    }
+
+    [Fact]
+    public async Task CopyLinkDialog_focuses_link_field()
+    {
+        const string url = "http://localhost/graph?focus=contoso-web";
+        var host = Render<RadzenDialog>();
+        var dialogs = Services.GetRequiredService<DialogService>();
+        Task<dynamic?>? open = null;
+
+        // A statement lambda, so InvokeAsync does not await the dialog, which completes only when it closes.
+        await host.InvokeAsync(() => { open = dialogs.OpenAsync<CopyLinkDialog>("Copy graph link",
+            new Dictionary<string, object?> { [nameof(CopyLinkDialog.Url)] = url },
+            new DialogOptions { AutoFocusFirstElement = false }); });
+        host.WaitForAssertion(() => Assert.Equal(url, host.Find("input[aria-label='Graph link']").GetAttribute("value")));
+
+        var focused = Assert.IsType<Microsoft.AspNetCore.Components.ElementReference>(JSInterop.VerifyFocusAsyncInvoke().Arguments[0]);
+        var dialog = host.FindComponent<CopyLinkDialog>();
+        Assert.Contains($"blazor:elementReference=\"{focused.Id}\"", dialog.Markup);
+        Assert.Contains("readonly", host.Find("input[aria-label='Graph link']").OuterHtml);
+
+        var dialogRoot = host.Find("[role='dialog']");
+        Assert.Equal("true", dialogRoot.GetAttribute("aria-modal"));
+        Assert.NotNull(dialogRoot.QuerySelector("input[aria-label='Graph link']"));
+
+        await host.FindAll("button").Single(b => b.TextContent.Trim() == "Close").ClickAsync();
+        await open!;
+        Assert.Empty(host.FindComponents<CopyLinkDialog>());
     }
 
     [Fact]

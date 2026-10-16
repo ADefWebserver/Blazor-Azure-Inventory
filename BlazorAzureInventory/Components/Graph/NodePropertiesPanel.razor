@@ -62,6 +62,18 @@
             </RadzenStack>
         </RadzenCard>
     }
+    else if (AggregateMembers is not null)
+    {
+        <RadzenCard>
+            <RadzenStack Gap="1rem">
+                <RadzenStack Gap="0.25rem">
+                    <RadzenText TextStyle="TextStyle.H5" class="rz-m-0">@AggregateLabel</RadzenText>
+                    <RadzenText TextStyle="TextStyle.Body2" class="muted rz-m-0">Not shown in this Focus view.</RadzenText>
+                </RadzenStack>
+                <DependencySummaryList Groups="@AggregateMembers" Title="Hidden resources" OnSelect="@OnFocus" />
+            </RadzenStack>
+        </RadzenCard>
+    }
     else if (Node is null || Index is null)
     {
         <RadzenStack AlignItems="AlignItems.Center" class="rz-p-8">
@@ -90,7 +102,7 @@
                             <RadzenButton Text="Focus" Icon="center_focus_strong" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light"
                                           Click="@(() => OnFocus.InvokeAsync(node.Id))" />
                         }
-                        @if (IsFocusMode && node.Id != FocusId)
+                        @if (IsFocusMode && !IsFocusCentre)
                         {
                             <RadzenButton Text="Expand" Icon="open_in_full" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light"
                                           Disabled="@(!CanExpand)" title="@ExpandDisabledReason"
@@ -108,11 +120,11 @@
                     }
                 </RadzenStack>
 
-                @if (Dependencies is { Count: > 0 })
+                @if (IsFocusCentre && Dependencies is { Count: > 0 })
                 {
                     <DependencySummaryList Groups="@Dependencies" OnSelect="@OnFocus" />
                 }
-                else if (IsFocusMode && Node.Id == FocusId)
+                else if (IsFocusCentre)
                 {
                     <RadzenText TextStyle="TextStyle.Body2" class="muted">No connections detected.</RadzenText>
                 }
@@ -141,6 +153,10 @@
     [Parameter] public string? ExpandDisabledReason { get; set; }
     [Parameter] public string? FocusId { get; set; }
     [Parameter] public IReadOnlyList<DependencyGroup>? Dependencies { get; set; }
+    /// <summary>Heading of the aggregate card, e.g. "+60 more apps".</summary>
+    [Parameter] public string? AggregateLabel { get; set; }
+    /// <summary>Resources hidden behind the selected "+N more" node; when set, the aggregate card is shown.</summary>
+    [Parameter] public IReadOnlyList<DependencyGroup>? AggregateMembers { get; set; }
 
     /// <summary>Every original edge behind the selected (possibly merged) edge. Defaults to <see cref="Edge"/> alone.</summary>
     [Parameter] public IReadOnlyList<GraphEdge>? Edges { get; set; }
@@ -154,6 +170,10 @@
 
     private List<KeyValuePair<string, string>> Properties { get; set; } = new();
     private List<ConnectionRow> Connections { get; set; } = new();
+
+    // FocusId keeps the URL's casing while node IDs keep Azure's, so the centre is matched ignoring case.
+    private bool IsFocusCentre => IsFocusMode && Node is not null && FocusId is not null
+        && Node.Id.Equals(FocusId, StringComparison.OrdinalIgnoreCase);
 
     private string? PortalUrl => Node is null ? null : ResourceInspector.PortalUrl(Node);
 

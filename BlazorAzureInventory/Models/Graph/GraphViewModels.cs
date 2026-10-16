@@ -19,7 +19,19 @@ public sealed record GraphViewPayload(
     // Not 'required': System.Text.Json rejects required members that are also [JsonIgnore].
     [JsonIgnore] public IReadOnlyList<string> NodeIds { get; init; } = [];                     // index -> GraphNode.Id
     [JsonIgnore] public IReadOnlyList<IReadOnlyList<string>> EdgeSources { get; init; } = [];  // index -> GraphEdge.Id list
+    // Focus only: payload index of each "+N more" node -> the resources it hides. Server only, like NodeIds.
+    [JsonIgnore] public IReadOnlyDictionary<int, AggregateMembership> Aggregates { get; init; } =
+        new Dictionary<int, AggregateMembership>();
 }
+
+/// <summary>One hidden neighbour and the edge that made it a candidate. Server only.</summary>
+public sealed record AggregateMember(string NodeId, GraphEdge Edge);
+
+/// <summary>Hidden neighbours behind one "+N more" node, reconciled against the final payload. Server only.</summary>
+public sealed record AggregateMembership(
+    string CenterId,                         // focus centre or expanded node the aggregate hangs off
+    string Category,                         // NodeCategories value, e.g. "Apps"
+    IReadOnlyList<AggregateMember> Members); // ordered by label then ID; never in the payload
 
 public sealed record ViewNode(
     [property: JsonPropertyName("t")] string Type,

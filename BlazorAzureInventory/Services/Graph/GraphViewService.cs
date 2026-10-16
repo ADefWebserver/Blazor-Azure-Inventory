@@ -84,6 +84,7 @@ public sealed partial class GraphViewService(IOptions<GraphViewOptions> options)
         var nodes = new Dictionary<string, GraphNode>(StringComparer.OrdinalIgnoreCase) { [focus.Id] = focus };
         var edges = new HashSet<GraphEdge>();
         var aggregateEdges = new List<(string Source, string Target, string Type)>();
+        var memberships = new Dictionary<string, AggregateMembership>(StringComparer.OrdinalIgnoreCase);
         var parents = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var processedCenters = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { focus.Id };
 
@@ -104,6 +105,8 @@ public sealed partial class GraphViewService(IOptions<GraphViewOptions> options)
             if (nodes.Count + newNodeIds > Options.FocusMaxNodes) continue;
             AddHop(hop);
         }
+
+        ReconcileAggregates();
 
         var orderedNodes = new List<GraphNode> { focus };
         orderedNodes.AddRange(nodes.Values.Where(n => !n.Id.Equals(focus.Id, StringComparison.OrdinalIgnoreCase))
@@ -185,7 +188,8 @@ public sealed partial class GraphViewService(IOptions<GraphViewOptions> options)
             false)
         {
             NodeIds = orderedNodes.Select(n => n.Id).ToList(),
-            EdgeSources = edgeSources
+            EdgeSources = edgeSources,
+            Aggregates = memberships.ToDictionary(m => nodeIndex[m.Key], m => m.Value)
         };
 
         void AddInitialHop(FocusHop hop)
@@ -223,6 +227,43 @@ public sealed partial class GraphViewService(IOptions<GraphViewOptions> options)
             foreach (var (child, parent) in hop.Parents)
             {
                 if (nodes.ContainsKey(child) && nodes.ContainsKey(parent)) parents.TryAdd(child, parent);
+            }
+
+            // Only aggregates that survived the node cap are drawn, so only those can be selected.
+            foreach (var (aggregateId, membership) in hop.Aggregates)
+            {
+                if (nodes.ContainsKey(aggregateId)) memberships.TryAdd(aggregateId, membership);
+            }
+        }
+
+        // A later hop (an expansion or a parent) can draw a resource that an earlier hop hid behind "+N more".
+        void ReconcileAggregates()
+        {
+            foreach (var (aggregateId, membership) in memberships.ToList())
+            {
+                var hidden = membership.Members.Where(m => !nodes.ContainsKey(m.NodeId)).ToList();
+                if (hidden.Count == membership.Members.Count) continue;
+
+                // The member is drawn now, so draw the connection that made it a candidate too.
+                foreach (var shown in membership.Members.Where(m => nodes.ContainsKey(m.NodeId))) edges.Add(shown.Edge);
+                if (hidden.Count == 0)
+                {
+                    memberships.Remove(aggregateId);
+                    nodes.Remove(aggregateId);
+                    aggregateEdges.RemoveAll(e => e.Source.Equals(aggregateId, StringComparison.OrdinalIgnoreCase)
+                        || e.Target.Equals(aggregateId, StringComparison.OrdinalIgnoreCase));
+                    continue;
+                }
+
+                var aggregate = nodes[aggregateId];
+                nodes[aggregateId] = new GraphNode
+                {
+                    Id = aggregate.Id,
+                    Type = aggregate.Type,
+                    Label = AggregateLabel(hidden.Count, membership.Category),
+                    Data = aggregate.Data
+                };
+                memberships[aggregateId] = membership with { Members = hidden };
             }
         }
     }
@@ -271,6 +312,27 @@ public sealed partial class GraphViewService(IOptions<GraphViewOptions> options)
     public static string CategoryOf(string nodeType) =>
         NodeCategories.ByType.GetValueOrDefault(nodeType, NodeCategories.External);
 
+    /// <summary>Lists the members of an aggregate as one group; setting keys only, never values.</summary>
+    public IReadOnlyList<DependencyGroup> SummarizeMembers(GraphIndex index, AggregateMembership membership)
+    {
+        var items = new List<DependencyItem>(membership.Members.Count);
+        foreach (var (nodeId, edge) in membership.Members)
+        {
+            if (!index.NodesById.TryGetValue(nodeId, out var node)) continue;
+            var structural = EdgeTypes.Structural.Contains(edge.Type);
+            var settingKeys = structural
+                ? ""
+                : string.Join(", ", ReadSettingKeys(edge).Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(k => k, StringComparer.OrdinalIgnoreCase));
+            items.Add(new DependencyItem(node.Id, node.Label, node.Type, edge.Type, settingKeys,
+                structural ? null : edge.Data.GetValueOrDefault("confidence")?.ToString()));
+        }
+        return items.Count == 0 ? [] : [new DependencyGroup(membership.Category, items)];
+    }
+
+    private static string AggregateLabel(int hiddenCount, string category) =>
+        $"+{hiddenCount} more {category.ToLowerInvariant()}";
+
     private static readonly HashSet<string> FocusDependencyTypes =
         [EdgeTypes.ConnectsTo, EdgeTypes.ReferencesSecret, EdgeTypes.PullsImageFrom];
 
@@ -284,7 +346,8 @@ public sealed partial class GraphViewService(IOptions<GraphViewOptions> options)
         IReadOnlyList<GraphNode> Nodes,
         IReadOnlyList<GraphEdge> Edges,
         IReadOnlyList<(string Source, string Target, string Type)> AggregateEdges,
-        IReadOnlyList<(string Child, string Parent)> Parents);
+        IReadOnlyList<(string Child, string Parent)> Parents,
+        IReadOnlyDictionary<string, AggregateMembership> Aggregates);   // aggregate node ID -> hidden candidates
 
     private static FocusHop CollectFocusHop(
         GraphIndex index, GraphNode center, bool hideEmulator, bool showLowConfidence, int maxNeighbours)
@@ -317,6 +380,7 @@ public sealed partial class GraphViewService(IOptions<GraphViewOptions> options)
 
         var selected = new List<GraphNode>();
         var aggregateNodes = new List<(GraphNode Node, string Type, bool Incoming)>();
+        var memberships = new Dictionary<string, AggregateMembership>(StringComparer.OrdinalIgnoreCase);
         foreach (var group in candidates.Values
                      .GroupBy(c => CategoryOf(c.Node.Type))
                      .OrderBy(g => g.Key, CategoryComparer))
@@ -335,13 +399,15 @@ public sealed partial class GraphViewService(IOptions<GraphViewOptions> options)
             {
                 Id = $"aggregate:{center.Id}:{category}",
                 Type = "Aggregate",
-                Label = $"+{hiddenCount} more {category.ToLowerInvariant()}",
+                Label = AggregateLabel(hiddenCount, category),
                 Data = new() { ["isAggregate"] = true }
             };
             selected.Add(aggregate);
             var representative = sorted[visible.Count].Edges[0];
             var incoming = representative.Target.Equals(center.Id, StringComparison.OrdinalIgnoreCase);
             aggregateNodes.Add((aggregate, representative.Type, incoming));
+            memberships[aggregate.Id] = new AggregateMembership(center.Id, category,
+                sorted.Skip(visible.Count).Select(c => new AggregateMember(c.Node.Id, c.Edges[0])).ToList());
         }
 
         foreach (var node in selected.Where(n => n.Data.GetValueOrDefault("isAggregate") is not true).ToList())
@@ -362,7 +428,7 @@ public sealed partial class GraphViewService(IOptions<GraphViewOptions> options)
         var aggregateEdges = aggregateNodes.Select(a =>
             a.Incoming ? (a.Node.Id, center.Id, a.Type) : (center.Id, a.Node.Id, a.Type)).ToList();
         return new FocusHop(uniqueNodes.Values.Where(n => !n.Id.Equals(center.Id, StringComparison.OrdinalIgnoreCase)).ToList(),
-            directEdges.ToList(), aggregateEdges, parents);
+            directEdges.ToList(), aggregateEdges, parents, memberships);
     }
 
     private static int DependencyDegree(GraphIndex index, string nodeId) =>

@@ -120,20 +120,29 @@
     [Parameter] public EventCallback FilterChanged { get; set; }
     [Parameter] public EventCallback<string> OnFindNode { get; set; }
     [Parameter] public int DebounceMs { get; set; } = 300;
+    /// <summary>Bumped by the page when tags change in place on the same <see cref="Nodes"/> list.</summary>
+    [Parameter] public int TagsVersion { get; set; }
 
     private List<NodeOption> _nodeOptions = new();
     private List<string> _tagNames = new();
+    private int _cachedTagsVersion;
 
     internal object NodeOptionsInstance => _nodeOptions;
+    internal IReadOnlyList<string> TagNamesInstance => _tagNames;
 
     protected override void OnInitialized() =>
         _tagsInitiallyCollapsed = string.IsNullOrWhiteSpace(Filter?.TagName) && string.IsNullOrWhiteSpace(Filter?.TagValue);
 
     protected override void OnParametersSet()
     {
-        if (ReferenceEquals(Nodes, _cachedNodes)) return;
-        _cachedNodes = Nodes;
-        _nodeOptions = Nodes.Select(n => new NodeOption(n.Id, $"{n.Label} ({n.Type})")).OrderBy(o => o.Display).ToList();
+        var nodesChanged = !ReferenceEquals(Nodes, _cachedNodes);
+        if (!nodesChanged && TagsVersion == _cachedTagsVersion) return;
+        if (nodesChanged)
+        {
+            _cachedNodes = Nodes;
+            _nodeOptions = Nodes.Select(n => new NodeOption(n.Id, $"{n.Label} ({n.Type})")).OrderBy(o => o.Display).ToList();
+        }
+        _cachedTagsVersion = TagsVersion;
         _tagNames = Nodes.SelectMany(n => n.GetTags().Keys)
             .Select(k => System.Text.RegularExpressions.Regex.Replace(k, @"-\d+$", ""))
             .Distinct(StringComparer.OrdinalIgnoreCase)

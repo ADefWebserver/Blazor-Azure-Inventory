@@ -259,6 +259,143 @@ public class GraphViewServiceTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void Focus_aggregate_retains_hidden_member_ids()
+    {
+        var (index, edges) = HubIndex(120);
+        var payload = WithOptions(new GraphViewOptions { FocusMaxNeighbours = 60 })
+            .BuildFocus(index, "sendgrid", [], hideEmulator: false, showLowConfidence: false)!;
+
+        var (aggregateIndex, membership) = Assert.Single(payload.Aggregates);
+        Assert.True(payload.Nodes[aggregateIndex].Aggregate);
+        Assert.Equal("sendgrid", membership.CenterId);
+        Assert.Equal(NodeCategories.Apps, membership.Category);
+        Assert.Equal(Enumerable.Range(60, 60).Select(HubAppId), membership.Members.Select(m => m.NodeId));
+        Assert.All(membership.Members, m => Assert.Same(edges.Single(e => e.Source == m.NodeId), m.Edge));
+        Assert.All(membership.Members, m => Assert.DoesNotContain(m.NodeId, payload.NodeIds));
+    }
+
+    [Theory]
+    [InlineData(4, "+1 more apps")]
+    [InlineData(3, null)]
+    public void Focus_aggregate_excludes_members_made_visible_by_expansion(int apps, string? expectedLabel)
+    {
+        // app-0 and app-1 are shown around the hub, the rest are hidden. app-2 also talks to app-0, so expanding app-0 draws it.
+        var nodes = Enumerable.Range(0, apps).Select(i => Node($"app-{i}", "WebApp", $"app-{i}"))
+            .Append(Node("hub", "ExternalService", "Hub")).ToList();
+        var edges = Enumerable.Range(0, apps).Select(i => Edge($"app-{i}", EdgeTypes.ConnectsTo, "hub"))
+            .Append(Edge("app-2", EdgeTypes.ConnectsTo, "app-0")).ToList();
+        var index = new GraphIndex(new GraphDocument { Nodes = nodes, Edges = edges });
+        var service = WithOptions(new GraphViewOptions { FocusMaxNeighbours = 2 });
+
+        var before = service.BuildFocus(index, "hub", [], hideEmulator: false, showLowConfidence: false)!;
+        Assert.Equal($"+{apps - 2} more apps", before.Nodes[Assert.Single(before.Aggregates).Key].Label);
+
+        var payload = service.BuildFocus(index, "hub", ["app-0"], hideEmulator: false, showLowConfidence: false)!;
+
+        Assert.Contains("app-2", payload.NodeIds);
+        Assert.NotNull(EdgeBetween(payload, "app-2", "hub"));
+        if (expectedLabel is null)
+        {
+            Assert.Empty(payload.Aggregates);
+            Assert.DoesNotContain(payload.Nodes, n => n.Aggregate == true);
+            Assert.Equal(payload.EdgeSources.Count(s => s.Count > 0), payload.Edges.Count);
+            Assert.Equal(3, payload.Nodes[IndexOf(payload, "hub")].Degree);
+        }
+        else
+        {
+            var (aggregateIndex, membership) = Assert.Single(payload.Aggregates);
+            Assert.Equal(expectedLabel, payload.Nodes[aggregateIndex].Label);
+            Assert.Equal(["app-3"], membership.Members.Select(m => m.NodeId));
+        }
+    }
+
+    [Fact]
+    public void Focus_structural_aggregate_members_have_structural_edge()
+    {
+        var nodes = Enumerable.Range(0, 4).Select(i => Node($"db-{i}", "SqlDatabase", $"db-{i}"))
+            .Append(Node("sql", "SqlServer", "SQL")).ToList();
+        var edges = Enumerable.Range(0, 4).Select(i => Edge("sql", EdgeTypes.HostsDatabase, $"db-{i}")).ToList();
+        var index = new GraphIndex(new GraphDocument { Nodes = nodes, Edges = edges });
+
+        var payload = WithOptions(new GraphViewOptions { FocusMaxNeighbours = 2 })
+            .BuildFocus(index, "sql", [], hideEmulator: false, showLowConfidence: false)!;
+
+        var membership = Assert.Single(payload.Aggregates).Value;
+        Assert.Equal(["db-2", "db-3"], membership.Members.Select(m => m.NodeId));
+        Assert.All(membership.Members, m => Assert.Equal(EdgeTypes.HostsDatabase, m.Edge.Type));
+        var items = Assert.Single(Service.SummarizeMembers(index, membership)).Items;
+        Assert.All(items, item =>
+        {
+            Assert.Equal(EdgeTypes.HostsDatabase, item.EdgeType);
+            Assert.Equal("", item.SettingKeys);
+            Assert.Null(item.Confidence);
+        });
+    }
+
+    [Fact]
+    public void Focus_payload_json_contains_no_aggregate_member_ids()
+    {
+        var (index, _) = HubIndex(120);
+        var payload = WithOptions(new GraphViewOptions { FocusMaxNeighbours = 60 })
+            .BuildFocus(index, "sendgrid", [], hideEmulator: false, showLowConfidence: false)!;
+        Assert.Equal(60, Assert.Single(payload.Aggregates).Value.Members.Count);
+
+        var json = JsonSerializer.Serialize(payload, GraphViewJson.Options);
+
+        Assert.DoesNotContain("/subscriptions/", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("aggregate:", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Aggregates", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("SendGrid:ApiKeyName", json, StringComparison.OrdinalIgnoreCase);
+        Assert.All(Enumerable.Range(60, 60), i => Assert.DoesNotContain($"contoso-web-{i:D3}", json));
+    }
+
+    [Fact]
+    public void SummarizeMembers_lists_members_with_setting_keys_only()
+    {
+        const string secret = "contoso-secret-value";
+        var (index, edges) = HubIndex(3);
+        foreach (var edge in edges) edge.Data["value"] = secret;
+        var membership = new AggregateMembership("sendgrid", NodeCategories.Apps,
+        [
+            new AggregateMember(HubAppId(2), edges[2]),
+            new AggregateMember("missing", edges[1]),
+            new AggregateMember(HubAppId(1), edges[1])
+        ]);
+
+        var group = Assert.Single(Service.SummarizeMembers(index, membership));
+
+        Assert.Equal(NodeCategories.Apps, group.Category);
+        Assert.Equal([HubAppId(2), HubAppId(1)], group.Items.Select(i => i.NodeId));
+        Assert.All(group.Items, item =>
+        {
+            Assert.Equal("SendGrid:ApiKeyName", item.SettingKeys);
+            Assert.Equal("High", item.Confidence);
+            Assert.Equal(EdgeTypes.ConnectsTo, item.EdgeType);
+            Assert.DoesNotContain(secret, $"{item.NodeId}{item.Label}{item.Type}{item.EdgeType}{item.SettingKeys}{item.Confidence}");
+        });
+        Assert.Equal("contoso-web-002", group.Items[0].Label);
+        Assert.Empty(Service.SummarizeMembers(index, membership with { Members = [] }));
+    }
+
+    private static string HubAppId(int i) => $"/subscriptions/sub-1/providers/Microsoft.Web/sites/contoso-web-{i:D3}";
+
+    /// <summary><paramref name="apps"/> web apps that each talk to the <c>sendgrid</c> hub through a SendGrid API key setting.</summary>
+    private static (GraphIndex Index, List<GraphEdge> Edges) HubIndex(int apps)
+    {
+        var nodes = Enumerable.Range(0, apps)
+            .Select(i => Node(HubAppId(i), "WebApp", $"contoso-web-{i:D3}"))
+            .Append(Node("sendgrid", "ExternalService", "SendGrid"))
+            .ToList();
+        var edges = Enumerable.Range(0, apps).Select(i =>
+        {
+            var edge = Edge(HubAppId(i), EdgeTypes.ConnectsTo, "sendgrid", "High");
+            edge.Data["references"] = new List<EdgeReference> { new("SendGrid:ApiKeyName", Confidence: "High") };
+            return edge;
+        }).ToList();
+        return (new GraphIndex(new GraphDocument { Nodes = nodes, Edges = edges }), edges);
+    }
+
+    [Fact]
     public void Focus_sets_hidden_neighbour_count()
     {
         const string hub = "sendgrid";
